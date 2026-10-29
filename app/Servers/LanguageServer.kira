@@ -1,0 +1,137 @@
+import Foundation
+
+// A language server: a program the session runs beside the editor and asks
+// what a language knows -- where a name is declared, what is wrong with a
+// file, what can be typed next.
+//
+// An application describes a server; the session runs it. When it starts, how
+// often it may restart, which documents it is told about and in which units it
+// counts columns are the session's business, so an editor written against one
+// server works unchanged against another.
+
+public struct LanguageServerConfiguration {
+    // How the server is named in status and in diagnostics: `typescript`.
+    let id: String
+    // The languages it serves, by language identifier.
+    let languages: [String]
+    let launch: ServerLaunch
+    let transport: ServerTransport = .Stdio
+    // Files whose presence marks a project's root: the nearest directory above
+    // a document holding one is the workspace the server is started in.
+    let rootMarkers: [String] = []
+    // Handed to the server as it starts, unread.
+    let initializationOptions: JsonValue = .Null
+    // What the server reads as its settings, unread.
+    let settings: JsonValue = .Null
+    // How many times the server may stop on its own before the session stops
+    // restarting it.
+    let restartLimit: Number = 5
+}
+
+// The program to run.
+public struct ServerLaunch {
+    let command: String
+    let arguments: [String] = []
+    let environment: [EnvironmentVariable] = []
+    // "" for the workspace root.
+    let workingDirectory: String = ""
+}
+
+public struct EnvironmentVariable {
+    let name: String
+    let value: String
+}
+
+// How the session and the server talk. JSON-RPC either way; only the pipe
+// differs.
+public enum ServerTransport {
+    // The server's standard input and output.
+    Stdio
+    // A TCP port the server listens on once started.
+    Socket(Number)
+    // A named pipe or unix socket at this path.
+    Pipe(String)
+}
+
+public enum ServerState {
+    // Described, not running: no document of its languages has been opened.
+    Stopped
+    // Launched and initializing; questions wait.
+    Starting
+    Running
+    // Stopped on its own and being started again; questions wait.
+    Restarting
+    // Stopped on its own more often than its restart limit allows, or could
+    // not be launched at all. Why, in its own words.
+    Failed(String)
+}
+
+// What a server says, once started, that it can answer.
+//
+// A session asks only what a server says it can answer, and answers the rest
+// itself or as unsupported -- so an editor can show a command only when the
+// document in front of it can do something with it.
+public struct ServerCapabilities {
+    let completion: Bool = false
+    let completionResolve: Bool = false
+    let completionTriggers: [String] = []
+    let hover: Bool = false
+    let signatureHelp: Bool = false
+    let signatureTriggers: [String] = []
+    let signatureRetriggers: [String] = []
+    let definition: Bool = false
+    let declaration: Bool = false
+    let typeDefinition: Bool = false
+    let implementation: Bool = false
+    let references: Bool = false
+    let documentHighlights: Bool = false
+    let documentSymbols: Bool = false
+    let workspaceSymbols: Bool = false
+    let codeActions: Bool = false
+    let codeActionResolve: Bool = false
+    let codeActionKinds: [CodeActionKind] = []
+    let codeLenses: Bool = false
+    let codeLensResolve: Bool = false
+    let formatting: Bool = false
+    let rangeFormatting: Bool = false
+    let onTypeFormatting: Bool = false
+    let onTypeTriggers: [String] = []
+    let rename: Bool = false
+    let prepareRename: Bool = false
+    let foldingRanges: Bool = false
+    let selectionRanges: Bool = false
+    let inlayHints: Bool = false
+    let documentLinks: Bool = false
+    let callHierarchy: Bool = false
+    let typeHierarchy: Bool = false
+    let semanticTokens: Bool = false
+    let pullDiagnostics: Bool = false
+    let executeCommands: [String] = []
+}
+
+// A server as the session reports it.
+public struct ServerStatus {
+    let id: String
+    let state: ServerState
+    let capabilities: ServerCapabilities = ServerCapabilities {}
+}
+
+// The servers an application would describe for the standard languages, with
+// the commands their packages install.
+public function typeScriptServer() -> LanguageServerConfiguration {
+    return LanguageServerConfiguration {
+        id: "typescript",
+        languages: ["typescript", "javascript"],
+        launch: ServerLaunch { command: "typescript-language-server", arguments: ["--stdio"] },
+        rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json"]
+    }
+}
+
+public function kiraServer() -> LanguageServerConfiguration {
+    return LanguageServerConfiguration {
+        id: "kira",
+        languages: ["kira"],
+        launch: ServerLaunch { command: "kira", arguments: ["lsp"] },
+        rootMarkers: ["package.kira"]
+    }
+}

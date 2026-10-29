@@ -1,0 +1,148 @@
+import Foundation
+
+// A document's colors, kept between frames.
+//
+// Lines are cut from the top down and remembered with the state each ends in,
+// because a line's colors depend on every line above it: a comment opened on
+// line ten colors line two thousand. Opening a document cuts no more than a
+// query's worth of it, so a file of any size opens at once; the rest is cut a
+// step at a time, between frames, and a line not yet cut reads as plain text.
+//
+// A change cuts again only what it could have changed: from its first edited
+// line down, until a line of the untouched tail ends in the state it ended in
+// before -- from there on every line starts where it started and holds what it
+// held, so its runs are the runs it had. Typing in a function re-cuts a line or
+// two; opening a block comment re-cuts to where it closes.
+//
+// Reading the colors is a read: an editor asks for the lines on screen every
+// frame, from a view's body, and asking changes nothing.
+
+public namespace HighlightBudget {
+    // How much text one step of cutting takes on: what a screen of a long file
+    // holds, many times over, and little enough that cutting it costs a
+    // millisecond or two.
+    let queryBytes: Number = 16384
+
+    // How much text each poll cuts while a document is not cut to its end: a few
+    // milliseconds of a frame, so a long file colors in within a few seconds and
+    // no frame waits for it.
+    let stepBytes: Number = 65536
+}
+
+public struct SyntaxHighlighter {
+    let lexer: Lexer
+    // The document's first lines, cut, each with the state the line after it
+    // starts in. The lines after them are not cut yet.
+    var cut: ChunkedArray<TokenizedLine> = ChunkedArray<TokenizedLine> {}
+    // How many lines the document had when the highlighter last saw it.
+    var documentLines: Number = 0
+
+    // Whether every line of the document is cut.
+    function isComplete() -> Bool {
+        return cut.count() >= documentLines
+    }
+
+    // Cuts on from the last line cut until about `budget` bytes of text more
+    // are cut, or the document ends. Whether it cut anything.
+    function advance(borrow mut self, document: borrow TextDocument, budget: Number) -> Bool {
+        let count = document.lineCount()
+        var line = cut.count()
+        if line >= count {
+            return false
+        }
+        var state = endState(line - 1)
+        var fresh: [TokenizedLine] = []
+        var bytes = 0
+        while line < count && bytes < budget {
+            let text = document.line(line)
+            let tokens = lexer.line(text, state)
+            state = copy tokens.endState
+            bytes = bytes + text.count + 1
+            fresh.append(move tokens)
+            line++
+        }
+        self.cut.replace(cut.count(), cut.count(), fresh)
+        return true
+    }
+
+    // Cuts what a change could have changed. `changed` says how many lines at
+    // the top and at the bottom of the document the change left as they were.
+    function update(borrow mut self, document: borrow TextDocument, changed: borrow ChangedLines) {
+        let count = document.lineCount()
+        let before = documentLines
+        let head = min(changed.head, min(count, before))
+        let tail = min(changed.tail, min(count - head, before - head))
+        let frontier = cut.count()
+        self.documentLines = count
+        // A change past the last line cut touches nothing cut.
+        if head >= frontier {
+            return
+        }
+        // A change running past the last line cut leaves nothing after its
+        // first line to keep: the lines from there on are cut again.
+        if before - tail > frontier {
+            let none: [TokenizedLine] = []
+            self.cut.replace(head, frontier, none)
+            self.advance(document, HighlightBudget.queryBytes)
+            return
+        }
+        // The cut lines of the untouched tail sit `count - before` lines from
+        // where they were.
+        let end = frontier - before + count
+        var fresh: [TokenizedLine] = []
+        var state = endState(head - 1)
+        var line = head
+        var settled = false
+        while line < end && !settled {
+            let tokens = lexer.line(document.line(line), state)
+            state = copy tokens.endState
+            // A line of the untouched tail that ends as it ended before: every
+            // line after it is unchanged.
+            if line >= count - tail && tokens.endState == cut.element(
+                line - count + before
+            ).endState {
+                settled = true
+            }
+            fresh.append(move tokens)
+            line++
+        }
+        self.cut.replace(head, line - count + before, fresh)
+    }
+
+    // Lines `from` up to, not including, `to`, cut into runs. A line not cut
+    // yet has none.
+    function lines(document: borrow TextDocument, from: Number, to: Number) -> [HighlightedLine] {
+        var highlighted: [HighlightedLine] = []
+        for index in max(from, 0)..min(to, document.lineCount()) {
+            var tokens: [SyntaxToken] = []
+            if index < cut.count() {
+                tokens = cut.element(index).tokens
+            }
+            highlighted.append(
+                HighlightedLine { number: index, text: document.line(index), tokens: move tokens }
+            )
+        }
+        return highlighted
+    }
+
+    // The region a line ends inside, if any.
+    function endState(line: Number) -> LexicalState {
+        if line < 0 || line >= cut.count() {
+            return .Code
+        }
+        return cut.element(line).endState
+    }
+}
+
+// A highlighter for a document, with its first query's worth of lines cut.
+public function syntaxHighlighter(
+    grammar: LexicalGrammar,
+    document: borrow TextDocument
+) -> SyntaxHighlighter {
+    var highlighter = SyntaxHighlighter {
+        lexer: lexer(move grammar),
+        documentLines: document.lineCount()
+    }
+    highlighter.advance(document, HighlightBudget.queryBytes)
+    return highlighter
+}

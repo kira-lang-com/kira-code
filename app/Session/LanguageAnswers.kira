@@ -1,0 +1,227 @@
+import Foundation
+
+// What a session answers from a document's colors alone, for a language no
+// server is running for: the words to complete, a name's other occurrences,
+// the blocks and comments that fold. Less than a server knows, and never
+// wrong about the text.
+
+// The document's names and the language's keywords that begin with the word
+// before the caret.
+function wordCompletions(
+    document: borrow TextDocument,
+    highlighter: borrow SyntaxHighlighter,
+    keywords: borrow [String],
+    position: borrow TextPosition
+) -> CodeResult {
+    let caret = document.clamped(position)
+    let line = document.line(caret.line)
+    var start = caret.character
+    while start > 0 && isWordByte(line.charAt(start - 1)) {
+        start--
+    }
+    var end = caret.character
+    while end < line.count && isWordByte(line.charAt(end)) {
+        end++
+    }
+    let typed = line.substring(start, caret.character)
+    let insert = TextRange {
+        start: TextPosition { line: caret.line, character: start },
+        end: copy caret
+    }
+    let replace = TextRange {
+        start: TextPosition { line: caret.line, character: start },
+        end: TextPosition { line: caret.line, character: end }
+    }
+    var labels = nameSet()
+    var items: [CompletionItem] = []
+    for keyword in 0..keywords.count {
+        if keywords[keyword].startsWith(typed) && keywords[keyword] != typed {
+            labels.insert(keywords[keyword])
+            items.append(
+                CompletionItem {
+                    label: copy keywords[keyword],
+                    kind: .Keyword,
+                    newText: copy keywords[keyword],
+                    insert: copy insert,
+                    replace: copy replace
+                }
+            )
+        }
+    }
+    for row in 0..highlighter.cut.count() {
+        let text = document.line(row)
+        let cut = highlighter.cut.element(row)
+        for token in 0..cut.tokens.count {
+            let run = cut.tokens[token]
+            let typing = row == caret.line && run.start == start
+            if isName(run.kind) && !typing && run.end - run.start > typed.count && text.substring(
+                run.start,
+                run.start + typed.count
+            ) == typed {
+                let word = text.substring(run.start, run.end)
+                if labels.insert(word) {
+                    items.append(
+                        CompletionItem {
+                            label: copy word,
+                            kind: completionKind(run.kind),
+                            newText: copy word,
+                            insert: copy insert,
+                            replace: copy replace
+                        }
+                    )
+                }
+            }
+        }
+    }
+    return .Completions(CompletionList { items: move items })
+}
+
+// Every place the name under the caret is written.
+function occurrences(
+    document: borrow TextDocument,
+    highlighter: borrow SyntaxHighlighter,
+    position: borrow TextPosition
+) -> CodeResult {
+    let caret = document.clamped(position)
+    var name = ""
+    let current = document.line(caret.line)
+    let caretRuns = highlighter.lines(document, caret.line, caret.line + 1)[0].tokens
+    for token in 0..caretRuns.count {
+        let run = caretRuns[token]
+        if run.start <= caret.character && caret.character <= run.end && isName(run.kind) {
+            name = current.substring(run.start, run.end)
+        }
+    }
+    var found: [DocumentHighlight] = []
+    if name.count == 0 {
+        return .Highlights(move found)
+    }
+    for line in 0..highlighter.cut.count() {
+        let text = document.line(line)
+        let cut = highlighter.cut.element(line)
+        for token in 0..cut.tokens.count {
+            let run = cut.tokens[token]
+            if isName(run.kind) && run.end - run.start == name.count && text.substring(
+                run.start,
+                run.end
+            ) == name {
+                found.append(
+                    DocumentHighlight {
+                        range: TextRange {
+                            start: TextPosition { line: line, character: run.start },
+                            end: TextPosition { line: line, character: run.end }
+                        },
+                        kind: .Text
+                    }
+                )
+            }
+        }
+    }
+    return .Highlights(move found)
+}
+
+// A bracket opened on one line and closed on a later one folds the lines
+// between; so does a comment running over several lines.
+function foldingRanges(
+    document: borrow TextDocument,
+    highlighter: borrow SyntaxHighlighter
+) -> CodeResult {
+    var ranges: [FoldingRange] = []
+    var open: [Number] = []
+    var depth = 0
+    var comment = -1
+    for line in 0..highlighter.cut.count() {
+        let cut = highlighter.cut.element(line)
+        for token in 0..cut.tokens.count {
+            if cut.tokens[token].kind == .Bracket {
+                let bracket: Number = document.line(line).charAt(cut.tokens[token].start)
+                if bracket == 40 || bracket == 91 || bracket == 123 {
+                    if depth < open.count {
+                        open[depth] = line
+                    } else {
+                        open.append(line)
+                    }
+                    depth++
+                } else if depth > 0 {
+                    depth--
+                    if line - 1 > open[depth] {
+                        ranges.append(FoldingRange { startLine: open[depth], endLine: line - 1 })
+                    }
+                }
+            }
+        }
+        let inComment = isCommentState(highlighter.endState(line))
+        if inComment && comment < 0 {
+            comment = line
+        }
+        if !inComment && comment >= 0 {
+            ranges.append(FoldingRange { startLine: comment, endLine: line, kind: .Comment })
+            comment = -1
+        }
+    }
+    return .FoldingRanges(move ranges)
+}
+
+// Whether a run is a name a person wrote, rather than a word of the language.
+function isName(kind: borrow TokenKind) -> Bool {
+    return kind == .Variable || kind == .Function || kind == .Method || kind == .Property ||
+        kind == .Type || kind == .Class || kind == .Interface || kind == .Struct || kind == .Enum ||
+        kind == .Parameter || kind == .Constant || kind == .EnumMember || kind == .Namespace
+}
+
+function isCommentState(state: borrow LexicalState) -> Bool {
+    return state == .BlockComment || state == .DocComment
+}
+
+function completionKind(kind: borrow TokenKind) -> CompletionItemKind {
+    match kind {
+        Function -> return .Function
+        Method -> return .Method
+        Property -> return .Property
+        Type, Class, Struct -> return .Class
+        Interface -> return .Interface
+        Enum -> return .Enum
+        EnumMember -> return .EnumMember
+        Constant -> return .Constant
+        Plain, Keyword, Comment, DocComment, StringLiteral, Escape, Number, Regexp,
+            Operator, Punctuation, Bracket, Namespace, TypeParameter, Parameter,
+            Variable, Event, Macro, Label, Decorator, Tag, Attribute, Invalid -> return .Variable
+    }
+}
+
+// A set of names, hashed, so gathering every distinct name in a long document
+// costs a pass over it rather than a pass per name.
+struct NameSet {
+    var buckets: [[String]]
+
+    // Adds a name; whether it was not already there.
+    function insert(name: borrow String) -> Bool {
+        let bucket = nameHash(name) % buckets.count
+        for index in 0..buckets[bucket].count {
+            if buckets[bucket][index] == name {
+                return false
+            }
+        }
+        self.buckets[bucket].append(copy name)
+        return true
+    }
+}
+
+function nameSet() -> NameSet {
+    var buckets: [[String]] = []
+    for _ in 0..1024 {
+        let empty: [String] = []
+        buckets.append(move empty)
+    }
+    return NameSet { buckets: move buckets }
+}
+
+// FNV-1a over the name's bytes, kept positive.
+function nameHash(name: borrow String) -> Number {
+    var hash = 2166136261
+    for index in 0..name.count {
+        let byte: Number = name.charAt(index)
+        hash = ((hash ^ byte) * 16777619) & 2147483647
+    }
+    return hash
+}

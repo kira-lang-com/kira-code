@@ -1,0 +1,114 @@
+import Foundation
+
+// What a run of source text IS, for the eye.
+//
+// The kinds are the language server protocol's semantic token types, with the
+// few a lexer can tell apart before any server has spoken -- a comment, a
+// string, a number, an operator -- folded in. One vocabulary for both, so a
+// grammar's answer and a server's answer for the same identifier can be laid
+// over each other, and an editor's theme maps each kind once.
+
+public enum TokenKind {
+    Plain
+    Keyword
+    Comment
+    DocComment
+    StringLiteral
+    Escape
+    Number
+    Regexp
+    Operator
+    Punctuation
+    Bracket
+    Namespace
+    Type
+    Class
+    Enum
+    Interface
+    Struct
+    TypeParameter
+    Parameter
+    Variable
+    Property
+    EnumMember
+    Event
+    Function
+    Method
+    Macro
+    Label
+    Decorator
+    Constant
+    Tag
+    Attribute
+    Invalid
+}
+
+// What else is true of a token: the qualities a semantic-tokens answer carries
+// beside its kind. A set, as a bitmask, because a token is often several at
+// once -- a readonly static property, a deprecated async method.
+public struct TokenModifiers {
+    let bits: Number = 0
+
+    function has(modifier: borrow TokenModifier) -> Bool {
+        let bit = tokenModifierBit(modifier)
+        return trunc(bits / bit) % 2 == 1
+    }
+
+    function with(modifier: borrow TokenModifier) -> TokenModifiers {
+        if has(modifier) {
+            return TokenModifiers { bits: bits }
+        }
+        return TokenModifiers { bits: bits + tokenModifierBit(modifier) }
+    }
+}
+
+public enum TokenModifier {
+    Declaration
+    Definition
+    Readonly
+    Static
+    Deprecated
+    Abstract
+    Async
+    Modification
+    Documentation
+    DefaultLibrary
+}
+
+// The protocol's order, so a server's modifier bits read straight across.
+public function tokenModifierBit(modifier: borrow TokenModifier) -> Number {
+    match modifier {
+        Declaration -> return 1
+        Definition -> return 2
+        Readonly -> return 4
+        Static -> return 8
+        Deprecated -> return 16
+        Abstract -> return 32
+        Async -> return 64
+        Modification -> return 128
+        Documentation -> return 256
+        DefaultLibrary -> return 512
+    }
+}
+
+// One run of a line: bytes `start` up to, not including, `end`.
+public struct SyntaxToken {
+    let start: Number
+    let end: Number
+    let kind: TokenKind
+    let modifiers: TokenModifiers = TokenModifiers {}
+}
+
+// A line, cut into runs end to end. Every byte of the line is in exactly one
+// run -- whitespace is Plain, not a gap -- so an editor draws a line by drawing
+// its runs in order and never has to find what fell between them.
+public struct HighlightedLine {
+    let number: Number
+    let text: String
+    let tokens: [SyntaxToken]
+
+    // The text of one run.
+    function segment(token: borrow SyntaxToken) -> String {
+        return text.substring(token.start, token.end)
+    }
+}

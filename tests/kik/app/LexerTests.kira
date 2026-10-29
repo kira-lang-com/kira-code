@@ -1,0 +1,52 @@
+import Foundation
+import KiraCode
+
+// A grammar that exercises every byte table the lexer builds.
+function probeGrammar() -> LexicalGrammar {
+    return LexicalGrammar {
+        keywords: ["let"],
+        lineComment: "//",
+        quotes: ["\""],
+        decoratorPrefix: "@",
+        capitalizedAreTypes: true,
+        callsAreFunctions: true
+    }
+}
+
+// The kinds of a line's runs, spaces left out.
+function kindsOf(text: String) -> [TokenKind] {
+    let line = lexer(probeGrammar()).line(text, .Code)
+    var kinds: [TokenKind] = []
+    for token in line.tokens {
+        if token.kind != .Plain { kinds.append(token.kind) }
+    }
+    return kinds
+}
+
+// A decorator, a keyword, a number with no leading digit, a call of a type, a
+// property, a string and a comment each come out as what they are.
+construct LexerClassifiesEveryByteTable() extends Test {
+    test {
+        let expected: [TokenKind] = [
+            .Decorator,
+            .Keyword,
+            .Variable,
+            .Operator,
+            .Number,
+            .Operator,
+            .Number,
+            .Operator,
+            .Function,
+            .Bracket,
+            .Type,
+            .Bracket,
+            .Punctuation,
+            .Property,
+            .StringLiteral,
+            .StringLiteral,
+            .Comment
+        ]
+        return kindsOf("@Main let x = .5 + 12 + foo(Bar).baz \"s\" // c") == expected ? 1 : 0
+    }
+    expect { return .Ok(1) }
+}

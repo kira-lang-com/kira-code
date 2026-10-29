@@ -1,0 +1,52 @@
+import Foundation
+
+// What is wrong with a document, as whoever checked it found it.
+
+public enum DiagnosticSeverity {
+    Error
+    Warning
+    Information
+    Hint
+}
+
+public enum DiagnosticTag {
+    // Code that does nothing: drawn faded rather than underlined.
+    Unnecessary
+    // Use of something deprecated: drawn struck through.
+    Deprecated
+}
+
+public struct Diagnostic {
+    let range: TextRange
+    let severity: DiagnosticSeverity
+    let message: String
+    // The checker's own name for the problem, `TS2304`, and where it is
+    // explained.
+    let code: String = ""
+    let codeDescription: String = ""
+    // Who found it: `typescript`, `eslint`.
+    let source: String = ""
+    let tags: [DiagnosticTag] = []
+    // The other places the problem is about: the first declaration of a name
+    // declared twice.
+    let related: [RelatedInformation] = []
+    // What the server needs to offer a fix for it, handed back unread.
+    let data: JsonValue = .Null
+}
+
+public struct RelatedInformation {
+    let location: Location
+    let message: String
+}
+
+// Every problem in a document, as of one version of it. A server's
+// diagnostics replace the ones it gave before for the same document; an empty
+// list is a document it has found clean.
+public struct DocumentDiagnostics {
+    let uri: DocumentUri
+    let version: Number
+    // Which server or checker: one document's diagnostics come from several,
+    // and each replaces only its own.
+    let source: String
+    let diagnostics: [Diagnostic]
+}

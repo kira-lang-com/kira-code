@@ -1,0 +1,9 @@
+import Foundation
+
+// KiraCode's storage and lexer, checked against plain arrays and known lines.
+// Run with `kira test`.
+
+@Main
+function main() {
+    print("kira-code-kik")
+}

@@ -1,0 +1,93 @@
+import Foundation
+import KiraCode
+
+namespace ChunkCase {
+    // Enough elements that every edit crosses chunk boundaries.
+    let seeded: Number = 1000
+    let edits: Number = 400
+    // A linear congruential walk, so every run makes the same edits.
+    let multiplier: Number = 1103515245
+    let increment: Number = 12345
+    let modulus: Number = 2147483648
+    // The longest run an edit replaces or inserts.
+    let longestRun: Number = 600
+    // Past two chunks of 256.
+    let appended: Number = 700
+}
+
+// The next step of the walk.
+function nextSeed(seed: Number) -> Number {
+    return (seed * ChunkCase.multiplier + ChunkCase.increment) % ChunkCase.modulus
+}
+
+// `oracle` with `from` up to `to` replaced by `inserted`.
+function spliced(
+    oracle: borrow [Number],
+    from: Number,
+    to: Number,
+    inserted: borrow [Number]
+) -> [Number] {
+    var result: [Number] = []
+    for index in 0..from { result.append(oracle[index]) }
+    for value in inserted { result.append(value) }
+    for index in to..oracle.count { result.append(oracle[index]) }
+    return result
+}
+
+function agrees(array: borrow ChunkedArray<Number>, oracle: borrow [Number]) -> Bool {
+    if array.count() != oracle.count { return false }
+    for index in 0..oracle.count {
+        if array.element(index) != oracle[index] { return false }
+    }
+    return true
+}
+
+// Random replacements, insertions and deletions, each followed by an append
+// and a set, leave the chunked array equal to a plain one after every edit.
+function randomEditsAgree() -> Bool {
+    var oracle: [Number] = []
+    for value in 0..ChunkCase.seeded { oracle.append(value) }
+    var array = chunkedArray(oracle)
+    var seed: Number = 7
+    for edit in 0..ChunkCase.edits {
+        seed = nextSeed(seed)
+        let from = seed % (oracle.count + 1)
+        seed = nextSeed(seed)
+        let to = from + seed % min(oracle.count - from + 1, ChunkCase.longestRun)
+        seed = nextSeed(seed)
+        var inserted: [Number] = []
+        for offset in 0..seed % ChunkCase.longestRun { inserted.append(edit * 10000 + offset) }
+        array.replace(from, to, inserted)
+        oracle = spliced(oracle, from, to, inserted)
+        array.append(edit)
+        oracle.append(edit)
+        if oracle.count > 0 {
+            let at = seed % oracle.count
+            array.set(at, -edit)
+            oracle[at] = -edit
+        }
+        if !agrees(array, oracle) { return false }
+    }
+    return true
+}
+
+construct ChunkedArrayMatchesPlainArray() extends Test {
+    test {
+        return randomEditsAgree() ? 1 : 0
+    }
+    expect { return .Ok(1) }
+}
+
+// Appends into an empty array fill chunks in order, and clearing it empties it.
+construct ChunkedArrayAppendsAndClears() extends Test {
+    test {
+        let empty: [Number] = []
+        var array = chunkedArray(empty)
+        for value in 0..ChunkCase.appended { array.append(value) }
+        let filled = array.count() == ChunkCase.appended && array.element(0) == 0
+            && array.element(ChunkCase.appended - 1) == ChunkCase.appended - 1
+        array.replace(0, ChunkCase.appended, empty)
+        return filled && array.count() == 0 ? 1 : 0
+    }
+    expect { return .Ok(1) }
+}

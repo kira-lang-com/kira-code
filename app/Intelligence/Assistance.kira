@@ -1,0 +1,170 @@
+import Foundation
+
+// What a language offers while a person types: completions, documentation,
+// the signature of the call they are in, the hints set between their words.
+
+public enum MarkupKind {
+    PlainText
+    Markdown
+}
+
+// Documentation as a server wrote it. Markdown is the editor's to render; a
+// plain text value is shown as it is.
+public struct MarkupContent {
+    let kind: MarkupKind = .PlainText
+    let value: String = ""
+
+    function isEmpty() -> Bool {
+        return value.count == 0
+    }
+}
+
+// --- Completion --------------------------------------------------------------
+
+public enum CompletionTrigger {
+    // Asked for: a shortcut, or typing a word.
+    Invoked
+    // Typing one of the server's trigger characters, `.` most often.
+    Character
+    // Typing on while a list the server marked incomplete is open.
+    Incomplete
+}
+
+public struct CompletionContext {
+    let trigger: CompletionTrigger = .Invoked
+    let character: String = ""
+}
+
+public enum CompletionItemKind {
+    Text
+    Method
+    Function
+    Constructor
+    Field
+    Variable
+    Class
+    Interface
+    Module
+    Property
+    Unit
+    Value
+    Enum
+    Keyword
+    Snippet
+    Color
+    File
+    Reference
+    Folder
+    EnumMember
+    Constant
+    Struct
+    Event
+    Operator
+    TypeParameter
+}
+
+public enum InsertTextFormat {
+    PlainText
+    // `$1`, `${2:name}` and `$0` mark tab stops the editor walks.
+    Snippet
+}
+
+public struct CompletionItem {
+    let label: String
+    // Set after the label without a gap, a signature: `(port: number)`.
+    let labelDetail: String = ""
+    // Set at the row's far end, a module: `./rpc`.
+    let labelDescription: String = ""
+    let kind: CompletionItemKind = .Text
+    let deprecated: Bool = false
+    let detail: String = ""
+    let documentation: MarkupContent = MarkupContent {}
+    let preselect: Bool = false
+    // What the list is ordered and filtered by when it is not the label.
+    let sortText: String = ""
+    let filterText: String = ""
+    let format: InsertTextFormat = .PlainText
+    // What accepting the item does. `insert` replaces the word up to the caret;
+    // `replace`, the whole word the caret is in -- which of the two is the
+    // editor's choice, by whether the person accepted with Enter or Tab.
+    let newText: String
+    let insert: TextRange
+    let replace: TextRange
+    // Edits elsewhere the item brings with it: the import of what it names.
+    let additionalEdits: [TextEdit] = []
+    // Characters that accept the item as well as being typed: `.` after a
+    // property, `(` after a function.
+    let commitCharacters: [String] = []
+    let command: Command? = .None
+    // What the server needs to resolve the item, handed back unread.
+    let data: JsonValue = .Null
+}
+
+public struct CompletionList {
+    // Whether typing further should ask again rather than filter what is here.
+    let incomplete: Bool = false
+    let items: [CompletionItem] = []
+}
+
+// --- Hover and signatures ----------------------------------------------------
+
+public struct Hover {
+    let contents: MarkupContent
+    // What the hover is about, highlighted while it shows.
+    let range: TextRange? = .None
+}
+
+public enum SignatureTrigger {
+    Invoked
+    Character
+    // The caret moved, or the call was edited, while the help was showing.
+    ContentChange
+}
+
+public struct SignatureHelpContext {
+    let trigger: SignatureTrigger = .Invoked
+    let character: String = ""
+    let retrigger: Bool = false
+}
+
+public struct ParameterInformation {
+    // Where the parameter is in its signature's label, in bytes, so the editor
+    // can set it apart there.
+    let start: Number
+    let end: Number
+    let documentation: MarkupContent = MarkupContent {}
+}
+
+public struct SignatureInformation {
+    let label: String
+    let documentation: MarkupContent = MarkupContent {}
+    let parameters: [ParameterInformation] = []
+    let activeParameter: Number = 0
+}
+
+public struct SignatureHelp {
+    let signatures: [SignatureInformation] = []
+    let activeSignature: Number = 0
+    let activeParameter: Number = 0
+}
+
+// --- Inlay hints -------------------------------------------------------------
+
+public enum InlayHintKind {
+    Type
+    Parameter
+    Other
+}
+
+// Text the editor sets between a document's own, not part of it: an inferred
+// type after a name, a parameter's name before an argument.
+public struct InlayHint {
+    let position: TextPosition
+    let label: String
+    let kind: InlayHintKind = .Other
+    let tooltip: MarkupContent = MarkupContent {}
+    let paddingLeading: Bool = false
+    let paddingTrailing: Bool = false
+    // What double-clicking the hint writes into the document.
+    let edits: [TextEdit] = []
+}

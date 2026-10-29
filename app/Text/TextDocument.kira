@@ -1,0 +1,219 @@
+import Foundation
+
+// A document as the session holds it: where it lives, what language it is
+// written in, which revision this is, and its text, a line at a time.
+//
+// Lines rather than one string because every question an editor asks is about
+// lines -- which to draw, where the caret is, what changed -- and kept in
+// chunks because an edit to one line of a long file should touch that line's
+// chunk, not copy the file.
+
+// Where a document lives, as a URI: `file:///home/me/main.ts` for a file on
+// disk, `untitled:Untitled-1` for one that has never been saved. A language
+// server names documents this way and so does the session, so a location a
+// server answers with names the same document the editor opened.
+public struct DocumentUri {
+    let value: String
+
+    function isFile() -> Bool {
+        return value.startsWith("file://")
+    }
+
+    // The file's path, or the URI itself when it does not name a file.
+    function path() -> String {
+        if isFile() {
+            return value.substring(7, value.count)
+        }
+        return value
+    }
+
+    // The last component of the path: what a tab is titled.
+    function name() -> String {
+        let parts = path().split("/")
+        if parts.count == 0 {
+            return value
+        }
+        return parts[parts.count - 1]
+    }
+
+    function equals(other: borrow DocumentUri) -> Bool {
+        return value == other.value
+    }
+}
+
+public function fileUri(path: String) -> DocumentUri {
+    return DocumentUri { value: "file://" + path }
+}
+
+public function untitledUri(name: String) -> DocumentUri {
+    return DocumentUri { value: "untitled:" + name }
+}
+
+// How lines end. Read from the text a document is opened with and written back
+// the same way, so saving a file never rewrites every line of it.
+public enum LineEnding {
+    Lf
+    CrLf
+}
+
+public function lineEndingText(ending: borrow LineEnding) -> String {
+    match ending {
+        Lf -> return "\n"
+        CrLf -> return "\r\n"
+    }
+}
+
+public struct TextDocument {
+    let uri: DocumentUri
+    let languageId: String
+    // Rises by one with every change, and never falls. A server's answer
+    // carries the version it was computed against, and an answer for a version
+    // the document has since left is an answer about text that is gone.
+    var version: Number = 1
+    var lines: ChunkedArray<String> = chunkedArray([""])
+    var lineEnding: LineEnding = .Lf
+
+    function lineCount() -> Number {
+        return lines.count()
+    }
+
+    // The text of a line, or nothing past the last one.
+    function line(index: Number) -> String {
+        if index < 0 || index >= lines.count() {
+            return ""
+        }
+        return lines.element(index)
+    }
+
+    function text() -> String {
+        let ending = lineEndingText(lineEnding)
+        var joined = ""
+        for index in 0..lines.count() {
+            if index > 0 {
+                joined = joined + ending
+            }
+            joined = joined + lines.element(index)
+        }
+        return joined
+    }
+
+    // The text a range covers, across as many lines as it spans.
+    function excerpt(range: borrow TextRange) -> String {
+        let start = clamped(range.start)
+        let end = clamped(range.end)
+        let first = lines.element(start.line)
+        if start.line == end.line {
+            return first.substring(start.character, end.character)
+        }
+        var covered = first.substring(start.character, first.count)
+        for index in (start.line + 1)..end.line {
+            covered = covered + "\n" + lines.element(index)
+        }
+        return covered + "\n" + lines.element(end.line).substring(0, end.character)
+    }
+
+    // The nearest position that is in the document: past the last line is the
+    // end of the last line, past a line's end is its end.
+    function clamped(position: borrow TextPosition) -> TextPosition {
+        if position.line < 0 {
+            return TextPosition { line: 0, character: 0 }
+        }
+        if position.line >= lines.count() {
+            let last = lines.count() - 1
+            return TextPosition { line: last, character: lines.element(last).count }
+        }
+        let length = lines.element(position.line).count
+        var character = position.character
+        if character < 0 {
+            character = 0
+        }
+        if character > length {
+            character = length
+        }
+        return TextPosition { line: position.line, character: character }
+    }
+
+    // Applies edits in order, each against the text the one before it left --
+    // the order a language server's change notification gives them in -- and
+    // moves the document to its next version once, for all of them. Answers
+    // how much of the document the edits left as it was.
+    function apply(edits: borrow [TextEdit]) -> ChangedLines {
+        var head = lines.count()
+        var tail = lines.count()
+        for index in 0..edits.count {
+            let start = clamped(edits[index].range.start)
+            let end = clamped(edits[index].range.end)
+            if start.line < head {
+                head = start.line
+            }
+            if lines.count() - 1 - end.line < tail {
+                tail = lines.count() - 1 - end.line
+            }
+            replace(edits[index])
+        }
+        self.version = version + 1
+        return ChangedLines { head: head, tail: tail }
+    }
+
+    function replace(borrow mut self, edit: borrow TextEdit) {
+        let start = clamped(edit.range.start)
+        var end = clamped(edit.range.end)
+        if end.isBefore(start) {
+            end = start
+        }
+        let before = lines.element(start.line).substring(0, start.character)
+        let last = lines.element(end.line)
+        let after = last.substring(end.character, last.count)
+        self.lines.replace(start.line, end.line + 1, splitLines(before + edit.newText + after))
+    }
+}
+
+// How many lines at the top of a document, and at its bottom, a change left
+// exactly as they were. Everything between is what the change could have
+// touched.
+public struct ChangedLines {
+    let head: Number
+    let tail: Number
+}
+
+public function textDocument(
+    uri: DocumentUri,
+    languageId: String,
+    text: borrow String
+) -> TextDocument {
+    // The first line's ending is the file's.
+    var ending: LineEnding = .Lf
+    match text.indexOf("\n") {
+        Some(newline) -> {
+            if newline > 0 && text.charAt(newline - 1) == 13 { ending = .CrLf }
+        }
+        // A one-line document has no line-ending preference.
+        None -> {}
+    }
+    return TextDocument {
+        uri: uri,
+        languageId: languageId,
+        lines: chunkedArray(splitLines(text)),
+        lineEnding: ending
+    }
+}
+
+// A text's lines, whichever ending it uses. Always at least one: an empty text
+// is one empty line, and a text ending in a newline has an empty line after it.
+public function splitLines(text: borrow String) -> [String] {
+    var lines: [String] = []
+    var start = 0
+    for index in 0..text.count {
+        let byte: Number = text.charAt(index)
+        if byte == 10 {
+            var end = index
+            if end > start && text.charAt(end - 1) == 13 {
+                end--
+            }
+            lines.append(text.substring(start, end))
+            start = index + 1
+        }
+    }
+    lines.append(text.substring(start, text.count))
+    return lines
+}

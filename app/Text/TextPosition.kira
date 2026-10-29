@@ -1,0 +1,74 @@
+import Foundation
+
+// Where something is in a document, and what replaces what.
+//
+// A position is a line and a column, both counted from zero, and the column
+// counts UTF-8 BYTES. That is what a Kira string indexes by, so a column an
+// editor holds can be handed to `substring` as it is. A language server may
+// count UTF-16 code units instead; the session asks every server for UTF-8
+// first and converts at the wire for any that cannot, so no editor ever holds
+// a column in a unit its strings do not use.
+
+public struct TextPosition {
+    let line: Number
+    let character: Number
+
+    function isBefore(other: borrow TextPosition) -> Bool {
+        if line != other.line {
+            return line < other.line
+        }
+        return character < other.character
+    }
+
+    function equals(other: borrow TextPosition) -> Bool {
+        return line == other.line && character == other.character
+    }
+}
+
+// A run of a document from `start` up to, not including, `end`. An empty range
+// -- start and end the same -- is a caret: where an insertion goes.
+public struct TextRange {
+    let start: TextPosition
+    let end: TextPosition
+
+    function isEmpty() -> Bool {
+        return start.equals(end)
+    }
+
+    function contains(position: borrow TextPosition) -> Bool {
+        return !position.isBefore(start) && position.isBefore(end)
+    }
+
+    function spansLines() -> Bool {
+        return start.line != end.line
+    }
+}
+
+public function caret(line: Number, character: Number) -> TextRange {
+    return TextRange {
+        start: TextPosition { line: line, character: character },
+        end: TextPosition { line: line, character: character }
+    }
+}
+
+// One replacement: the text in `range` becomes `newText`. Inserting is
+// replacing an empty range; deleting is replacing with nothing.
+public struct TextEdit {
+    let range: TextRange
+    let newText: String
+}
+
+// A selection as an editor keeps it: where it was started and where the caret
+// is now, which is not always the later of the two. A multi-cursor editor holds
+// an array of these.
+public struct TextSelection {
+    let anchor: TextPosition
+    let active: TextPosition
+
+    function range() -> TextRange {
+        if active.isBefore(anchor) {
+            return TextRange { start: active, end: anchor }
+        }
+        return TextRange { start: anchor, end: active }
+    }
+}

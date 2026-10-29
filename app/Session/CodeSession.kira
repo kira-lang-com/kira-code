@@ -1,0 +1,430 @@
+import Foundation
+
+// The one thing an editor talks to.
+//
+// A session holds the documents an editor has open and answers every question
+// about them, from whoever can: a language server running for the document's
+// language when one is, the language's own grammar when none is. The editor
+// never learns which. It opens, edits and closes documents, asks, and once a
+// frame collects what came back with `poll`.
+//
+//     let session = codeSession(fileUri("/home/me/project"))
+//     session.open(fileUri("/home/me/project/main.ts"), readFile(path))
+//     let lines = session.highlight(uri, 0, 40)
+//     let asked = session.request(.Hover(DocumentPosition { uri: uri, position: caret }))
+//     for event in session.poll() { ... }
+//
+// A session is a handle. Copying one copies the handle, not the documents: a
+// view holds it in `@State` and reads it every frame for the price of a
+// pointer, and every copy sees every edit. It lives until `shutdown`, which is
+// also when the servers it runs are stopped.
+public struct CodeSession {
+    let store: RawPtr
+
+    function open(uri: DocumentUri, text: borrow String, languageId: String = "") {
+        var session = nativeRecover<SessionStore>(store)
+        session.open(move uri, text, move languageId)
+    }
+
+    function change(uri: borrow DocumentUri, edits: borrow [TextEdit]) {
+        var session = nativeRecover<SessionStore>(store)
+        session.change(uri, edits)
+    }
+
+    function save(uri: borrow DocumentUri) {
+        var session = nativeRecover<SessionStore>(store)
+        session.save(uri)
+    }
+
+    function close(uri: borrow DocumentUri) {
+        var session = nativeRecover<SessionStore>(store)
+        session.close(uri)
+    }
+
+    function document(uri: borrow DocumentUri) -> TextDocument? {
+        let session = nativeRecover<SessionStore>(store)
+        return session.document(uri)
+    }
+
+    function lineCount(uri: borrow DocumentUri) -> Number {
+        let session = nativeRecover<SessionStore>(store)
+        return session.lineCount(uri)
+    }
+
+    function isModified(uri: borrow DocumentUri) -> Bool {
+        let session = nativeRecover<SessionStore>(store)
+        return session.isModified(uri)
+    }
+
+    function language(uri: borrow DocumentUri) -> Language {
+        let session = nativeRecover<SessionStore>(store)
+        return session.language(uri)
+    }
+
+    function highlight(uri: borrow DocumentUri, from: Number, to: Number) -> [HighlightedLine] {
+        let session = nativeRecover<SessionStore>(store)
+        return session.highlight(uri, from, to)
+    }
+
+    function diagnostics(uri: borrow DocumentUri) -> [Diagnostic] {
+        let session = nativeRecover<SessionStore>(store)
+        return session.diagnostics(uri)
+    }
+
+    // Adds a language, or replaces the one with its identifier. Documents
+    // already open keep the language they were opened in.
+    function registerLanguage(language: Language) {
+        var session = nativeRecover<SessionStore>(store)
+        session.languages.register(move language)
+    }
+
+    // Describes a server, replacing any described with its id.
+    function registerServer(server: LanguageServerConfiguration) {
+        var session = nativeRecover<SessionStore>(store)
+        session.register(move server)
+    }
+
+    function request(request: borrow CodeRequest) -> RequestId {
+        var session = nativeRecover<SessionStore>(store)
+        return session.request(request)
+    }
+
+    function cancel(id: borrow RequestId) {
+        var session = nativeRecover<SessionStore>(store)
+        session.cancel(id)
+    }
+
+    function poll() -> [CodeEvent] {
+        var session = nativeRecover<SessionStore>(store)
+        return session.poll()
+    }
+
+    // Stops the session: its servers, and the documents it holds. A handle to
+    // it is not to be used after.
+    function shutdown() {
+        nativeUserDataRelease(store)
+    }
+}
+
+public function codeSession(root: DocumentUri) -> CodeSession {
+    let held = nativeUserData(
+        nativeState(
+            SessionStore { workspace: WorkspaceFolder { uri: copy root, name: root.name() } }
+        )
+    )
+    nativeUserDataRetain(held)
+    return CodeSession { store: held }
+}
+
+// What a session holds, behind its handle. Every change is made in place:
+// an edit touches the edited document and nothing else.
+struct SessionStore {
+    let workspace: WorkspaceFolder
+    var languages: LanguageRegistry = standardLanguages()
+    var servers: [LanguageServerConfiguration] = []
+    var documents: [OpenDocument] = []
+    var published: [DocumentDiagnostics] = []
+    var events: [CodeEvent] = []
+    // Answers waiting for the next poll, kept apart from the other events so a
+    // question withdrawn before it is collected can still be marked cancelled.
+    var replies: [CodeReply] = []
+    var nextRequest: Number = 1
+
+    // --- Documents -----------------------------------------------------------
+
+    // Opens a document with the text it has now, in the language its name
+    // says, or in `languageId` when one is given -- an untitled document has no
+    // name to say it. Opening a document already open starts it over.
+    function open(uri: DocumentUri, text: borrow String, languageId: String = "") {
+        var language = languages.languageOf(uri)
+        if languageId.count > 0 {
+            language = languages.language(languageId)
+        }
+        let document = textDocument(copy uri, copy language.id, text)
+        let opened = OpenDocument {
+            highlighter: syntaxHighlighter(copy language.grammar, document),
+            document: move document,
+            savedVersion: 1
+        }
+        let index = documentIndex(uri)
+        if index >= 0 {
+            self.documents[index] = move opened
+        } else {
+            self.documents.append(move opened)
+        }
+    }
+
+    // Applies edits to an open document, in order, as one change: the document
+    // moves to its next version, and every answer still owed for the version it
+    // left is cancelled.
+    function change(uri: borrow DocumentUri, edits: borrow [TextEdit]) {
+        let index = documentIndex(uri)
+        if index < 0 || edits.count == 0 {
+            return
+        }
+        let changed = self.documents[index].document.apply(edits)
+        self.documents[index].highlighter.update(documents[index].document, changed)
+        cancelReplies(uri)
+    }
+
+    // The document as saved: it reads as unmodified until its next change.
+    function save(uri: borrow DocumentUri) {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return
+        }
+        self.documents[index].savedVersion = documents[index].document.version
+    }
+
+    function close(uri: borrow DocumentUri) {
+        var kept: [OpenDocument] = []
+        for index in 0..documents.count {
+            if !documents[index].document.uri.equals(uri) {
+                kept.append(copy documents[index])
+            }
+        }
+        self.documents = move kept
+        var clean: [DocumentDiagnostics] = []
+        for index in 0..published.count {
+            if !published[index].uri.equals(uri) {
+                clean.append(copy published[index])
+            }
+        }
+        self.published = move clean
+        cancelReplies(uri)
+    }
+
+    function document(uri: borrow DocumentUri) -> TextDocument? {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return .None
+        }
+        return .Some(copy documents[index].document)
+    }
+
+    // How many lines an open document has; none for one that is not open.
+    function lineCount(uri: borrow DocumentUri) -> Number {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return 0
+        }
+        return documents[index].document.lineCount()
+    }
+
+    // Whether the document has changed since it was opened or last saved.
+    function isModified(uri: borrow DocumentUri) -> Bool {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return false
+        }
+        return documents[index].document.version != documents[index].savedVersion
+    }
+
+    function language(uri: borrow DocumentUri) -> Language {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return languages.languageOf(uri)
+        }
+        return languages.language(documents[index].document.languageId)
+    }
+
+    // --- Colors and problems -------------------------------------------------
+
+    // Lines `from` up to, not including, `to` of an open document, cut into
+    // colored runs. Ask for the lines on screen, every frame, from a view's
+    // body: the lines were cut when the text changed, and asking is a read.
+    function highlight(uri: borrow DocumentUri, from: Number, to: Number) -> [HighlightedLine] {
+        let index = documentIndex(uri)
+        if index < 0 {
+            let none: [HighlightedLine] = []
+            return none
+        }
+        return documents[index].highlighter.lines(documents[index].document, from, to)
+    }
+
+    // Every problem known in a document, from every checker that has looked.
+    function diagnostics(uri: borrow DocumentUri) -> [Diagnostic] {
+        var found: [Diagnostic] = []
+        for index in 0..published.count {
+            if published[index].uri.equals(uri) {
+                for item in 0..published[index].diagnostics.count {
+                    found.append(copy published[index].diagnostics[item])
+                }
+            }
+        }
+        return found
+    }
+
+    // --- Servers -------------------------------------------------------------
+
+    // Describes a server, replacing any described with its id.
+    function register(server: LanguageServerConfiguration) {
+        var kept: [LanguageServerConfiguration] = []
+        for index in 0..servers.count {
+            if servers[index].id != server.id {
+                kept.append(copy servers[index])
+            }
+        }
+        kept.append(move server)
+        self.servers = move kept
+    }
+
+    // --- Questions -----------------------------------------------------------
+
+    function request(request: borrow CodeRequest) -> RequestId {
+        let id = RequestId { value: nextRequest }
+        self.nextRequest = nextRequest + 1
+        let uri = subject(request)
+        var version = 0
+        let index = documentIndex(uri)
+        if index >= 0 {
+            version = documents[index].document.version
+        }
+        let result = answer(request)
+        self.replies.append(
+            CodeReply { id: copy id, uri: move uri, version: version, result: move result }
+        )
+        return id
+    }
+
+    // Withdraws a question. Its answer still arrives, as `Cancelled`, so every
+    // question an editor asked is answered exactly once.
+    function cancel(id: borrow RequestId) {
+        var kept: [CodeReply] = []
+        for index in 0..replies.count {
+            if replies[index].id.equals(id) {
+                kept.append(cancelled(replies[index]))
+            } else {
+                kept.append(copy replies[index])
+            }
+        }
+        self.replies = move kept
+    }
+
+    // Answers about a version of a document it has left are answers about
+    // text that is gone.
+    function cancelReplies(uri: borrow DocumentUri) {
+        var current = -1
+        let index = documentIndex(uri)
+        if index >= 0 {
+            current = documents[index].document.version
+        }
+        var kept: [CodeReply] = []
+        for reply in 0..replies.count {
+            if replies[reply].uri.equals(uri) && replies[reply].version != current {
+                kept.append(cancelled(replies[reply]))
+            } else {
+                kept.append(copy replies[reply])
+            }
+        }
+        self.replies = move kept
+    }
+
+    // What the document's own language can tell without a server: words to
+    // complete from, where a name recurs, what folds.
+    function answer(request: borrow CodeRequest) -> CodeResult {
+        match request {
+            Completion(query) -> return completions(query)
+            DocumentHighlights(at) -> return highlights(at)
+            FoldingRanges(uri) -> return folds(uri)
+            ResolveCompletion(item) -> return .ResolvedCompletion(copy item)
+            ResolveCodeAction(action) -> return .ResolvedCodeAction(copy action)
+            ResolveCodeLens(lens) -> return .ResolvedCodeLens(copy lens)
+            Hover(at) -> return .Unsupported
+            SignatureHelp(query) -> return .Unsupported
+            Definition(at) -> return .Unsupported
+            Declaration(at) -> return .Unsupported
+            TypeDefinition(at) -> return .Unsupported
+            Implementation(at) -> return .Unsupported
+            References(query) -> return .Unsupported
+            DocumentSymbols(uri) -> return .Unsupported
+            WorkspaceSymbols(name) -> return .Unsupported
+            CodeActions(query) -> return .Unsupported
+            CodeLenses(uri) -> return .Unsupported
+            Format(query) -> return .Unsupported
+            FormatRange(query) -> return .Unsupported
+            FormatOnType(query) -> return .Unsupported
+            PrepareRename(at) -> return .Unsupported
+            Rename(query) -> return .Unsupported
+            SelectionRanges(query) -> return .Unsupported
+            InlayHints(range) -> return .Unsupported
+            DocumentLinks(uri) -> return .Unsupported
+            PrepareCallHierarchy(at) -> return .Unsupported
+            IncomingCalls(item) -> return .Unsupported
+            OutgoingCalls(item) -> return .Unsupported
+            PrepareTypeHierarchy(at) -> return .Unsupported
+            Supertypes(item) -> return .Unsupported
+            Subtypes(item) -> return .Unsupported
+            ExecuteCommand(command) -> return .Unsupported
+            Diagnostics(uri) -> return .Unsupported
+        }
+    }
+
+    function completions(query: borrow CompletionQuery) -> CodeResult {
+        let index = documentIndex(query.uri)
+        if index < 0 {
+            return .Nothing
+        }
+        return wordCompletions(
+            documents[index].document,
+            documents[index].highlighter,
+            language(query.uri).grammar.keywords,
+            query.position
+        )
+    }
+
+    function highlights(at: borrow DocumentPosition) -> CodeResult {
+        let index = documentIndex(at.uri)
+        if index < 0 {
+            return .Nothing
+        }
+        return occurrences(documents[index].document, documents[index].highlighter, at.position)
+    }
+
+    function folds(uri: borrow DocumentUri) -> CodeResult {
+        let index = documentIndex(uri)
+        if index < 0 {
+            return .Nothing
+        }
+        return foldingRanges(documents[index].document, documents[index].highlighter)
+    }
+
+    // --- Events --------------------------------------------------------------
+
+    // Everything that happened since the last poll, oldest first. Call it once
+    // a frame: each poll also cuts the next step of every document not cut to
+    // its end yet, and says so.
+    function poll() -> [CodeEvent] {
+        for index in 0..documents.count {
+            if self.documents[index].highlighter.advance(
+                documents[index].document,
+                HighlightBudget.stepBytes
+            ) {
+                self.events.append(.HighlightsChanged(copy documents[index].document.uri))
+            }
+        }
+        var drained = move events
+        self.events = []
+        for index in 0..replies.count {
+            drained.append(.Replied(copy replies[index]))
+        }
+        self.replies = []
+        return drained
+    }
+
+    function documentIndex(uri: borrow DocumentUri) -> Number {
+        for index in 0..documents.count {
+            if documents[index].document.uri.equals(uri) {
+                return index
+            }
+        }
+        return -1
+    }
+}
+
+// A document the session holds, with its colors.
+struct OpenDocument {
+    var document: TextDocument
+    var highlighter: SyntaxHighlighter
+    var savedVersion: Number
+}

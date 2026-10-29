@@ -1,0 +1,59 @@
+import Foundation
+
+// Asking a session a question, and what becomes of the answer.
+//
+// Every question is answered through `poll`, never on the spot, whoever
+// answers it: a question the session can answer itself sits with the others
+// until the next poll, so an editor has one way to receive an answer, not two,
+// and does not change when a server takes the question over.
+
+extend SessionStore {
+    // The document a question is about; the workspace's root for a question
+    // about no one document.
+    function subject(request: borrow CodeRequest) -> DocumentUri {
+        match request {
+            Completion(query) -> return copy query.uri
+            ResolveCompletion(item) -> return copy workspace.uri
+            Hover(at) -> return copy at.uri
+            SignatureHelp(query) -> return copy query.uri
+            Definition(at) -> return copy at.uri
+            Declaration(at) -> return copy at.uri
+            TypeDefinition(at) -> return copy at.uri
+            Implementation(at) -> return copy at.uri
+            References(query) -> return copy query.uri
+            DocumentHighlights(at) -> return copy at.uri
+            DocumentSymbols(uri) -> return copy uri
+            WorkspaceSymbols(name) -> return copy workspace.uri
+            CodeActions(query) -> return copy query.uri
+            ResolveCodeAction(action) -> return copy workspace.uri
+            CodeLenses(uri) -> return copy uri
+            ResolveCodeLens(lens) -> return copy workspace.uri
+            Format(query) -> return copy query.uri
+            FormatRange(query) -> return copy query.uri
+            FormatOnType(query) -> return copy query.uri
+            PrepareRename(at) -> return copy at.uri
+            Rename(query) -> return copy query.uri
+            FoldingRanges(uri) -> return copy uri
+            SelectionRanges(query) -> return copy query.uri
+            InlayHints(range) -> return copy range.uri
+            DocumentLinks(uri) -> return copy uri
+            PrepareCallHierarchy(at) -> return copy at.uri
+            IncomingCalls(item) -> return copy item.uri
+            OutgoingCalls(item) -> return copy item.uri
+            PrepareTypeHierarchy(at) -> return copy at.uri
+            Supertypes(item) -> return copy item.uri
+            Subtypes(item) -> return copy item.uri
+            ExecuteCommand(command) -> return copy workspace.uri
+            Diagnostics(uri) -> return copy uri
+        }
+    }
+}
+
+function cancelled(reply: borrow CodeReply) -> CodeReply {
+    return CodeReply {
+        id: copy reply.id,
+        uri: copy reply.uri,
+        version: reply.version,
+        result: .Cancelled
+    }
+}

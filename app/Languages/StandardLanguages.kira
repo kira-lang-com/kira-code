@@ -1,0 +1,133 @@
+import Foundation
+
+// The languages a session knows without being told.
+
+public function plainTextLanguage() -> Language {
+    return Language {
+        id: "plaintext",
+        name: "Plain Text",
+        extensions: ["txt"],
+        grammar: plainGrammar()
+    }
+}
+
+public function typeScriptLanguage() -> Language {
+    return Language {
+        id: "typescript",
+        name: "TypeScript",
+        extensions: ["ts", "mts", "cts", "tsx"],
+        grammar: ecmaScriptGrammar(
+            typeScriptKeywords(),
+            ["any", "bigint", "boolean", "never", "number", "object", "string", "symbol", "unknown", "void"]
+        ),
+        brackets: curlyBrackets(),
+        autoClosingPairs: ecmaScriptClosingPairs(),
+        indentation: Indentation { width: 2 }
+    }
+}
+
+public function javaScriptLanguage() -> Language {
+    return Language {
+        id: "javascript",
+        name: "JavaScript",
+        extensions: ["js", "mjs", "cjs", "jsx"],
+        grammar: ecmaScriptGrammar(ecmaScriptKeywords(), []),
+        brackets: curlyBrackets(),
+        autoClosingPairs: ecmaScriptClosingPairs(),
+        indentation: Indentation { width: 2 }
+    }
+}
+
+public function jsonLanguage() -> Language {
+    return Language {
+        id: "json",
+        name: "JSON",
+        extensions: ["json", "jsonc"],
+        fileNames: [".babelrc", ".eslintrc"],
+        grammar: LexicalGrammar {
+            constants: ["true", "false", "null"],
+            lineComment: "//",
+            blockComment: Delimiters { open: "/*", close: "*/" },
+            quotes: ["\""],
+            keyedStringsAreProperties: true,
+            operators: ":"
+        },
+        brackets: [BracketPair { open: "{", close: "}" }, BracketPair { open: "[", close: "]" }],
+        autoClosingPairs: [BracketPair { open: "{", close: "}" }, BracketPair {
+            open: "[",
+            close: "]"
+        }, BracketPair { open: "\"", close: "\"" }],
+        indentation: Indentation { width: 2 }
+    }
+}
+
+public function kiraLanguage() -> Language {
+    return Language {
+        id: "kira",
+        name: "Kira",
+        extensions: ["kira"],
+        grammar: LexicalGrammar {
+            keywords: ["Any", "Package", "as", "attempt", "body", "borrow", "break", "comptime", "construct", "continue", "copy", "else", "enum", "expand", "extend", "extends", "for", "function", "handle", "if", "import", "in", "let", "macro", "match", "move", "mut", "public", "quote", "return", "self", "some", "struct", "trait", "try", "var", "while"],
+            typeKeywords: ["Bool", "Float", "F32", "F64", "Int", "I8", "I16", "I32", "I64", "RawPtr", "String", "U8", "U16", "U32", "U64", "Void"],
+            constants: ["true", "false"],
+            lineComment: "//",
+            blockComment: Delimiters { open: "/*", close: "*/" },
+            quotes: ["\""],
+            decoratorPrefix: "@",
+            capitalizedAreTypes: true,
+            callsAreFunctions: true
+        },
+        brackets: curlyBrackets(),
+        autoClosingPairs: [BracketPair { open: "(", close: ")" }, BracketPair {
+            open: "{",
+            close: "}"
+        }, BracketPair { open: "[", close: "]" }, BracketPair { open: "\"", close: "\"" }]
+    }
+}
+
+// TypeScript and JavaScript share every lexical rule but their keywords.
+function ecmaScriptGrammar(keywords: [String], typeKeywords: [String]) -> LexicalGrammar {
+    return LexicalGrammar {
+        keywords: move keywords,
+        typeKeywords: move typeKeywords,
+        constants: ["true", "false", "null", "undefined", "NaN", "Infinity", "this", "super"],
+        lineComment: "//",
+        blockComment: Delimiters { open: "/*", close: "*/" },
+        docCommentOpen: "/**",
+        quotes: ["\"", "'"],
+        multilineQuote: "`",
+        decoratorPrefix: "@",
+        capitalizedAreTypes: true,
+        callsAreFunctions: true
+    }
+}
+
+function ecmaScriptKeywords() -> [String] {
+    return ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "from", "function", "get", "if", "import", "in", "instanceof", "let", "new", "of", "return", "set", "static", "switch", "throw", "try", "typeof", "var", "void", "while", "with", "yield"]
+}
+
+function typeScriptKeywords() -> [String] {
+    var keywords = ecmaScriptKeywords()
+    let typed = ["abstract", "as", "asserts", "declare", "enum", "implements", "infer", "interface", "is", "keyof", "module", "namespace", "override", "private", "protected", "public", "readonly", "satisfies", "type", "unique"]
+    for index in 0..typed.count {
+        keywords.append(typed[index])
+    }
+    return keywords
+}
+
+function curlyBrackets() -> [BracketPair] {
+    return [BracketPair { open: "(", close: ")" }, BracketPair {
+        open: "{",
+        close: "}"
+    }, BracketPair { open: "[", close: "]" }]
+}
+
+function ecmaScriptClosingPairs() -> [BracketPair] {
+    return [BracketPair { open: "(", close: ")" }, BracketPair {
+        open: "{",
+        close: "}"
+    }, BracketPair { open: "[", close: "]" }, BracketPair { open: "\"", close: "\"" }, BracketPair {
+        open: "'",
+        close: "'"
+    }, BracketPair { open: "`", close: "`" }]
+}

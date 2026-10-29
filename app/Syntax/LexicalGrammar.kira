@@ -1,0 +1,73 @@
+import Foundation
+
+// A language's lexical shape, as data.
+//
+// Enough to color a file the moment it opens, before any server has started,
+// and for a language no server speaks at all: which words are keywords, how a
+// comment and a string begin and end, what counts as an operator. It does not
+// parse. Telling a parameter from a local, or a method from a free function, is
+// a semantic question, and a language server's semantic tokens answer it over
+// the top of what the grammar found.
+
+public struct LexicalGrammar {
+    let keywords: [String] = []
+    // Words that name types: `number`, `string`, `Int`.
+    let typeKeywords: [String] = []
+    // Words that name values: `true`, `null`, `undefined`.
+    let constants: [String] = []
+    // Opens a comment that runs to the end of the line; "" for none.
+    let lineComment: String = ""
+    let blockComment: Delimiters = Delimiters {}
+    // A block comment that documents what follows it, `/**` in TypeScript; its
+    // close is the block comment's.
+    let docCommentOpen: String = ""
+    // Quotes that open a string closed on the same line.
+    let quotes: [String] = []
+    // The quote of a string that may run over many lines, "" for none.
+    let multilineQuote: String = ""
+    let escape: String = "\\"
+    // Marks an attribute on a declaration, `@` in TypeScript and Kira.
+    let decoratorPrefix: String = ""
+    // Whether a word set in capitals names a type, as by convention it does in
+    // TypeScript and Kira.
+    let capitalizedAreTypes: Bool = false
+    // Whether a word directly followed by `(` is a function being called or
+    // declared.
+    let callsAreFunctions: Bool = false
+    // Whether a string directly followed by `:` is an object's key, as in JSON.
+    let keyedStringsAreProperties: Bool = false
+    let brackets: String = "(){}[]"
+    let operators: String = "+-*/%=<>!&|^~?:"
+}
+
+// What opens a region and what closes it; an empty open means none.
+public struct Delimiters {
+    let open: String = ""
+    let close: String = ""
+
+    function isEmpty() -> Bool {
+        return open.count == 0
+    }
+}
+
+// Where the lexer is at the end of a line: the region the next line starts
+// inside, if any. The highlighter keeps one per line, which is what lets it
+// re-color from an edited line rather than from the top of the file.
+public enum LexicalState {
+    Code
+    BlockComment
+    DocComment
+    MultilineString
+}
+
+// What `Lexer.line` answers: the line's runs, and the state the next line
+// starts in.
+public struct TokenizedLine {
+    let tokens: [SyntaxToken]
+    let endState: LexicalState
+}
+
+// The grammar of text with no language: one run per line.
+public function plainGrammar() -> LexicalGrammar {
+    return LexicalGrammar { brackets: "", operators: "" }
+}

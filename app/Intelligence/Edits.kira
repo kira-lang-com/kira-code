@@ -1,0 +1,154 @@
+import Foundation
+
+// Changes a language proposes: fixes, refactorings, renames, formatting.
+
+// Something to run on the server's side: what a code lens or a code action
+// carries when its effect is more than an edit.
+public struct Command {
+    let title: String
+    let command: String
+    let arguments: [JsonValue] = []
+}
+
+// A change to the workspace, in the order it is to be made. Text edits and
+// file operations interleave -- create a file, then fill it -- which is why
+// they are one list and not two.
+public struct WorkspaceEdit {
+    let changes: [WorkspaceChange] = []
+}
+
+public enum WorkspaceChange {
+    Edit(DocumentEdit)
+    Create(CreateFile)
+    Rename(RenameFile)
+    Delete(DeleteFile)
+}
+
+// Edits to one document, against one version of it. An edit for a version the
+// document has left is refused rather than applied to text it was not meant
+// for.
+public struct DocumentEdit {
+    let uri: DocumentUri
+    // The version the edits were computed against; none when the server did
+    // not say.
+    let version: Number? = .None
+    let edits: [TextEdit]
+}
+
+public struct CreateFile {
+    let uri: DocumentUri
+    let overwrite: Bool = false
+    let ignoreIfExists: Bool = false
+}
+
+public struct RenameFile {
+    let from: DocumentUri
+    let to: DocumentUri
+    let overwrite: Bool = false
+    let ignoreIfExists: Bool = false
+}
+
+public struct DeleteFile {
+    let uri: DocumentUri
+    let recursive: Bool = false
+    let ignoreIfNotExists: Bool = false
+}
+
+// --- Code actions ------------------------------------------------------------
+
+// What a code action does, as a dotted path a kind is narrowed by:
+// `refactor.extract.function` is a `refactor.extract` is a `refactor`.
+public struct CodeActionKind {
+    let value: String
+
+    // Whether this kind is `kind` or narrows it.
+    function isWithin(kind: borrow CodeActionKind) -> Bool {
+        return value == kind.value || value.startsWith(kind.value + ".")
+    }
+}
+
+public function quickFixAction() -> CodeActionKind {
+    return CodeActionKind { value: "quickfix" }
+}
+
+public function refactorAction() -> CodeActionKind {
+    return CodeActionKind { value: "refactor" }
+}
+
+public function extractAction() -> CodeActionKind {
+    return CodeActionKind { value: "refactor.extract" }
+}
+
+public function inlineAction() -> CodeActionKind {
+    return CodeActionKind { value: "refactor.inline" }
+}
+
+public function rewriteAction() -> CodeActionKind {
+    return CodeActionKind { value: "refactor.rewrite" }
+}
+
+public function sourceAction() -> CodeActionKind {
+    return CodeActionKind { value: "source" }
+}
+
+public function organizeImportsAction() -> CodeActionKind {
+    return CodeActionKind { value: "source.organizeImports" }
+}
+
+public function fixAllAction() -> CodeActionKind {
+    return CodeActionKind { value: "source.fixAll" }
+}
+
+public enum CodeActionTrigger {
+    // Asked for: the light bulb, a shortcut.
+    Invoked
+    // Asked on the person's behalf: the caret moved, the file was saved.
+    Automatic
+}
+
+public struct CodeActionContext {
+    // The diagnostics under the range, which the fixes offered are for.
+    let diagnostics: [Diagnostic] = []
+    // The kinds wanted, none meaning every kind.
+    let only: [CodeActionKind] = []
+    let trigger: CodeActionTrigger = .Invoked
+}
+
+public struct CodeAction {
+    let title: String
+    let kind: CodeActionKind = CodeActionKind { value: "" }
+    let diagnostics: [Diagnostic] = []
+    // The one fix to apply without asking which: what a "fix" shortcut takes.
+    let preferred: Bool = false
+    // Why the action cannot be taken here, shown instead of taking it; "" when
+    // it can.
+    let disabledReason: String = ""
+    let edit: WorkspaceEdit = WorkspaceEdit {}
+    let command: Command? = .None
+    // What the server needs to resolve the action, handed back unread.
+    let data: JsonValue = .Null
+}
+
+// A command shown above a line: "3 references", "Run test".
+public struct CodeLens {
+    let range: TextRange
+    let command: Command? = .None
+    let data: JsonValue = .Null
+}
+
+// --- Formatting and renaming -------------------------------------------------
+
+public struct FormattingOptions {
+    let tabSize: Number = 4
+    let insertSpaces: Bool = true
+    let trimTrailingWhitespace: Bool = true
+    let insertFinalNewline: Bool = true
+    let trimFinalNewlines: Bool = true
+}
+
+// What a rename would rename, before the person has typed the new name: the
+// range to edit in place, and the text to start it with.
+public struct RenameTarget {
+    let range: TextRange
+    let placeholder: String
+}

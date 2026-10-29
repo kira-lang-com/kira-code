@@ -1,0 +1,46 @@
+import Foundation
+
+// What a session has to tell its editor, collected between frames and handed
+// over by `CodeSession.poll`.
+
+public enum CodeEvent {
+    // A question was answered.
+    Replied(CodeReply)
+    // A checker's diagnostics for a document changed.
+    Diagnostics(DocumentDiagnostics)
+    // A document's colors changed without its text changing: more of it was
+    // cut, or a server's semantic tokens arrived. Its visible lines want
+    // drawing again.
+    HighlightsChanged(DocumentUri)
+    // A server started, stopped, or failed.
+    ServerChanged(ServerStatus)
+    Progress(ProgressReport)
+    // Something a server wants the person to read.
+    Message(ServerMessage)
+}
+
+// Long work a server is doing: indexing a project, building.
+public struct ProgressReport {
+    let server: String
+    // The same for every report of one piece of work.
+    let token: String
+    let title: String
+    let message: String = ""
+    // How far along, 0 to 100; negative when the server cannot say.
+    let percentage: Number = -1
+    let cancellable: Bool = false
+    let done: Bool = false
+}
+
+public enum MessageKind {
+    Error
+    Warning
+    Info
+    Log
+}
+
+public struct ServerMessage {
+    let server: String
+    let kind: MessageKind
+    let text: String
+}

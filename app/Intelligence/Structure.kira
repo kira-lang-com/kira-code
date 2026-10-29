@@ -1,0 +1,32 @@
+import Foundation
+
+// A document's shape: what folds, what a selection grows to, what links where.
+
+public enum FoldingRangeKind {
+    Region
+    Comment
+    Imports
+}
+
+// Lines that fold into their first: `startLine` stays, the lines after it up to
+// and including `endLine` hide.
+public struct FoldingRange {
+    let startLine: Number
+    let endLine: Number
+    let kind: FoldingRangeKind = .Region
+    // What the folded lines show as, "" for the editor's own ellipsis.
+    let collapsedText: String = ""
+}
+
+// What a selection at one caret grows through, innermost first: the word, the
+// expression, the statement, the block, the function.
+public struct SelectionRange {
+    let ranges: [TextRange]
+}
+
+// A run of a document that opens something: a URL, an imported module's file.
+public struct DocumentLink {
+    let range: TextRange
+    let target: DocumentUri
+    let tooltip: String = ""
+}

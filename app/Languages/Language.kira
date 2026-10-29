@@ -1,0 +1,112 @@
+import Foundation
+
+// What a language is to an editor: the files written in it, its grammar, and
+// the conventions typing in it follows -- which brackets pair, which close
+// themselves, how far a line indents.
+
+public struct Language {
+    // The protocol's language identifier: `typescript`, `json`, `kira`. What a
+    // document is opened as, and what a server says it serves.
+    let id: String
+    let name: String
+    // Without the dot: `ts`, `json`.
+    let extensions: [String] = []
+    // Whole names that are this language whatever their extension: `Makefile`.
+    let fileNames: [String] = []
+    let grammar: LexicalGrammar = LexicalGrammar {}
+    let brackets: [BracketPair] = []
+    // What typing the opening half of a pair inserts the closing half of.
+    let autoClosingPairs: [BracketPair] = []
+    let indentation: Indentation = Indentation {}
+}
+
+public struct BracketPair {
+    let open: String
+    let close: String
+}
+
+// How a level of indentation is written.
+public struct Indentation {
+    let width: Number = 4
+    let usesSpaces: Bool = true
+
+    // One level, as text.
+    function unit() -> String {
+        if !usesSpaces {
+            return "\t"
+        }
+        var spaces = ""
+        for _ in 0..width {
+            spaces = spaces + " "
+        }
+        return spaces
+    }
+}
+
+// Every language the session knows, and which one a document is in.
+public struct LanguageRegistry {
+    var languages: [Language] = []
+
+    // Adds a language, or replaces the one with its identifier: an
+    // application's own grammar for a language wins over the built-in one.
+    function register(language: Language) {
+        var kept: [Language] = []
+        for index in 0..languages.count {
+            if languages[index].id != language.id {
+                kept.append(languages[index])
+            }
+        }
+        kept.append(move language)
+        self.languages = move kept
+    }
+
+    function language(id: borrow String) -> Language {
+        for index in 0..languages.count {
+            if languages[index].id == id {
+                return languages[index]
+            }
+        }
+        return plainTextLanguage()
+    }
+
+    // The language a document's name says it is in: its whole name first, then
+    // its extension, then plain text.
+    function languageOf(uri: borrow DocumentUri) -> Language {
+        let name = uri.name()
+        for index in 0..languages.count {
+            if isListed(languages[index].fileNames, name) {
+                return languages[index]
+            }
+        }
+        let parts = name.split(".")
+        if parts.count > 1 {
+            let extension = parts[parts.count - 1]
+            for index in 0..languages.count {
+                if isListed(languages[index].extensions, extension) {
+                    return languages[index]
+                }
+            }
+        }
+        return plainTextLanguage()
+    }
+}
+
+// The registry every session starts with.
+public function standardLanguages() -> LanguageRegistry {
+    var registry = LanguageRegistry {}
+    registry.register(plainTextLanguage())
+    registry.register(typeScriptLanguage())
+    registry.register(javaScriptLanguage())
+    registry.register(jsonLanguage())
+    registry.register(kiraLanguage())
+    return registry
+}
+
+function isListed(words: borrow [String], word: borrow String) -> Bool {
+    for index in 0..words.count {
+        if words[index] == word {
+            return true
+        }
+    }
+    return false
+}

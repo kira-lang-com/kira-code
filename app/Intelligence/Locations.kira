@@ -1,0 +1,129 @@
+import Foundation
+
+// Places in the workspace, and what lives at them.
+
+// A range in a document, anywhere in the workspace.
+public struct Location {
+    let uri: DocumentUri
+    let range: TextRange
+}
+
+// Where a jump from `origin` lands: the whole declaration it lands in, and the
+// part of it -- the name -- the editor selects. A server that answers with bare
+// locations is answered here as links whose two ranges are the same.
+public struct LocationLink {
+    let origin: TextRange
+    let uri: DocumentUri
+    let range: TextRange
+    let selection: TextRange
+}
+
+// A document and a caret in it: what most questions are asked about.
+public struct DocumentPosition {
+    let uri: DocumentUri
+    let position: TextPosition
+}
+
+public struct DocumentRange {
+    let uri: DocumentUri
+    let range: TextRange
+}
+
+// A program's place in the workspace a server indexes: a root it opens
+// documents under.
+public struct WorkspaceFolder {
+    let uri: DocumentUri
+    let name: String
+}
+
+// --- Symbols -----------------------------------------------------------------
+
+public enum SymbolKind {
+    File
+    Module
+    Namespace
+    Package
+    Class
+    Method
+    Property
+    Field
+    Constructor
+    Enum
+    Interface
+    Function
+    Variable
+    Constant
+    StringValue
+    NumberValue
+    BooleanValue
+    ArrayValue
+    Object
+    Key
+    Null
+    EnumMember
+    Struct
+    Event
+    Operator
+    TypeParameter
+}
+
+public enum SymbolTag {
+    Deprecated
+}
+
+// A declaration in a document's outline, and the declarations inside it.
+public struct DocumentSymbol {
+    let name: String
+    let detail: String = ""
+    let kind: SymbolKind
+    let tags: [SymbolTag] = []
+    // All of it, body included: what folding and the breadcrumb follow.
+    let range: TextRange
+    // Its name: what is selected when the outline is clicked.
+    let selection: TextRange
+    let children: [DocumentSymbol] = []
+}
+
+// A declaration found by name across the workspace.
+public struct WorkspaceSymbol {
+    let name: String
+    let kind: SymbolKind
+    let tags: [SymbolTag] = []
+    let container: String = ""
+    let location: Location
+}
+
+// --- Hierarchies -------------------------------------------------------------
+
+// A function in a call hierarchy, or a type in a type hierarchy: the two are
+// the same shape, and walking either is asking for an item's neighbours.
+public struct HierarchyItem {
+    let name: String
+    let kind: SymbolKind
+    let tags: [SymbolTag] = []
+    let detail: String = ""
+    let uri: DocumentUri
+    let range: TextRange
+    let selection: TextRange
+    // What the server needs to find this item again, handed back unread.
+    let data: JsonValue = .Null
+}
+
+// One caller or callee, and every place in the calling function the call is
+// made.
+public struct HierarchyCall {
+    let item: HierarchyItem
+    let ranges: [TextRange]
+}
+
+public enum HighlightKind {
+    Text
+    Read
+    Write
+}
+
+// Another occurrence of what the caret is on, in the same document.
+public struct DocumentHighlight {
+    let range: TextRange
+    let kind: HighlightKind
+}

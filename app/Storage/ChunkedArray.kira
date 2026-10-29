@@ -1,0 +1,125 @@
+import Foundation
+
+// A long array kept in chunks of a few hundred elements, so that replacing a
+// run of it rewrites the chunks the run falls in and shares every other chunk
+// with the array it was. A document of two hundred thousand lines takes a typed
+// newline by rewriting one chunk, not by copying the document.
+
+namespace ChunkLayout {
+    let capacity: Number = 256
+}
+
+// One chunk's elements, and the index in the whole array of the first of them.
+struct ArrayChunk<Element> {
+    var elements: [Element]
+    var start: Number
+}
+
+public struct ChunkedArray<Element> {
+    var chunks: [ArrayChunk<Element>] = []
+    var total: Number = 0
+
+    function count() -> Number {
+        return total
+    }
+
+    function element(index: Number) -> Element {
+        let chunk = chunkHolding(index)
+        return copy chunks[chunk].elements[index - chunks[chunk].start]
+    }
+
+    function set(index: Number, value: Element) {
+        let chunk = chunkHolding(index)
+        self.chunks[chunk].elements[index - chunks[chunk].start] = move value
+    }
+
+    function append(value: Element) {
+        if chunks.count == 0 || chunks[chunks.count - 1].elements.count >= ChunkLayout.capacity {
+            self.chunks.append(ArrayChunk<Element> { elements: [], start: total })
+        }
+        self.chunks[chunks.count - 1].elements.append(move value)
+        self.total++
+    }
+
+    // The index just past a chunk's last element.
+    function chunkEnd(chunk: Number) -> Number {
+        return chunks[chunk].start + chunks[chunk].elements.count
+    }
+
+    // Replaces the elements from `from` up to, not including, `to` with
+    // `elements`, which may be more or fewer than it replaces.
+    function replace(from: Number, to: Number, elements: borrow [Element]) {
+        let first = chunkHolding(from)
+        var last = chunkHolding(to)
+        var touched: [Element] = []
+        if chunks.count > 0 {
+            // A run that leaves its chunks small takes the next chunk in with
+            // it, so deleting never leaves a trail of chunks of one.
+            if last + 1 < chunks.count && chunkEnd(last + 1) - chunks[first].start - (
+                to - from
+            ) + elements.count < trunc(ChunkLayout.capacity / 2) {
+                last++
+            }
+            for index in chunks[first].start..from {
+                touched.append(copy chunks[first].elements[index - chunks[first].start])
+            }
+        }
+        for index in 0..elements.count {
+            touched.append(copy elements[index])
+        }
+        if chunks.count > 0 {
+            for index in to..chunkEnd(last) {
+                let chunk = chunkHolding(index)
+                touched.append(copy chunks[chunk].elements[index - chunks[chunk].start])
+            }
+        }
+        var rebuilt: [ArrayChunk<Element>] = []
+        for chunk in 0..first {
+            rebuilt.append(copy chunks[chunk])
+        }
+        // The touched elements again, cut into chunks of even size.
+        var start: Number = chunks.count > 0 ? chunks[first].start : 0
+        let pieces = trunc((touched.count + ChunkLayout.capacity - 1) / ChunkLayout.capacity)
+        var taken = 0
+        for piece in 0..pieces {
+            let end = trunc(touched.count * (piece + 1) / pieces)
+            var cut: [Element] = []
+            for index in taken..end {
+                cut.append(copy touched[index])
+            }
+            rebuilt.append(ArrayChunk<Element> { elements: move cut, start: start })
+            start += end - taken
+            taken = end
+        }
+        let shift = elements.count - (to - from)
+        for chunk in min(last + 1, chunks.count)..chunks.count {
+            var moved = copy chunks[chunk]
+            moved.start += shift
+            rebuilt.append(move moved)
+        }
+        self.chunks = move rebuilt
+        self.total += shift
+    }
+
+    // The chunk an index falls in. The count itself falls in the last chunk,
+    // so that inserting at the end has a chunk to go in.
+    function chunkHolding(index: Number) -> Number {
+        var low = 0
+        var high = chunks.count - 1
+        while low < high {
+            let middle = trunc((low + high + 1) / 2)
+            if chunks[middle].start <= index {
+                low = middle
+            } else {
+                high = middle - 1
+            }
+        }
+        return low
+    }
+}
+
+public function chunkedArray<Element>(elements: borrow [Element]) -> ChunkedArray<Element> {
+    var array = ChunkedArray<Element> {}
+    array.replace(0, 0, elements)
+    return array
+}

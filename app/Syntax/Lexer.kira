@@ -1,0 +1,415 @@
+import Foundation
+
+// Cutting one line into runs by a lexical grammar.
+//
+// A line at a time, from the state the line before it ended in, because that
+// is the unit an editor re-colors after an edit: the edited line, then each
+// line after it until one ends in the state it ended in before.
+//
+// Opening a file cuts every line of it, so cutting reads each byte once, looks
+// it up in tables built when the lexer is, and allocates nothing but the runs
+// it answers with.
+
+namespace LexerLimit {
+    let wordBuckets: Number = 128
+}
+
+// The bytes the lexer tells apart by value.
+namespace LexerByte {
+    let values: Number = 256
+    let tab: Number = 9
+    let carriageReturn: Number = 13
+    let space: Number = 32
+    let dollar: Number = 36
+    let openParen: Number = 40
+    let dot: Number = 46
+    let zero: Number = 48
+    let nine: Number = 57
+    let colon: Number = 58
+    let upperA: Number = 65
+    let upperZ: Number = 90
+    let underscore: Number = 95
+    let lowerA: Number = 97
+    let lowerZ: Number = 122
+    // Every byte from here up belongs to a non-ASCII scalar.
+    let firstNonAscii: Number = 128
+}
+
+public struct Lexer {
+    let grammar: LexicalGrammar
+    // What each byte value can be, by byte value.
+    let bytes: [ByteClass]
+    // The grammar's keywords, type keywords and constants, hashed.
+    let words: [[ListedWord]]
+
+    // Cuts a line, from the state the line before it ended in.
+    function line(text: borrow String, state: borrow LexicalState) -> TokenizedLine {
+        var scan = LineScan { state: copy state }
+        while scan.index < text.count {
+            match scan.state {
+                Code -> scanCode(text, scan)
+                BlockComment -> scanRegionClose(text, grammar.blockComment.close, .Comment, scan)
+                DocComment -> scanRegionClose(text, grammar.blockComment.close, .DocComment, scan)
+                MultilineString -> scanString(text, grammar.multilineQuote, scan)
+            }
+        }
+        return TokenizedLine { tokens: move scan.tokens, endState: scan.state }
+    }
+
+    function scanCode(text: borrow String, scan: borrow mut LineScan) {
+        let start = scan.index
+        let first = byteAt(text, start)
+        if bytes[first].space {
+            scan.emit(text, skippingSpaces(text, start), .Plain)
+            return
+        }
+        if bytes[first].patternStart {
+            if opens(text, grammar.lineComment, start) {
+                scan.emit(text, text.count, .Comment)
+                return
+            }
+            if opens(text, grammar.docCommentOpen, start) && !opens(
+                text,
+                grammar.blockComment.close,
+                start + 1
+            ) {
+                scan.state = .DocComment
+                scan.emit(text, start + grammar.docCommentOpen.count, .DocComment)
+                return
+            }
+            if opens(text, grammar.blockComment.open, start) {
+                scan.state = .BlockComment
+                scan.emit(text, start + grammar.blockComment.open.count, .Comment)
+                return
+            }
+            if opens(text, grammar.multilineQuote, start) {
+                scan.state = .MultilineString
+                scan.emit(text, start + grammar.multilineQuote.count, .StringLiteral)
+                return
+            }
+            for index in 0..grammar.quotes.count {
+                if opens(text, grammar.quotes[index], start) {
+                    scanQuoted(text, grammar.quotes[index], scan)
+                    return
+                }
+            }
+        }
+        if bytes[first].digit || (first == LexerByte.dot && bytes[byteAt(text, start + 1)].digit) {
+            var end = start + 1
+            while end < text.count && (
+                bytes[byteAt(text, end)].wordByte || byteAt(text, end) == LexerByte.dot
+            ) {
+                end++
+            }
+            scan.emit(text, end, .Number)
+            return
+        }
+        if bytes[first].patternStart && opens(text, grammar.decoratorPrefix, start) && bytes[byteAt(
+            text,
+            start + grammar.decoratorPrefix.count
+        )].wordStart {
+            scan.emit(text, wordEnd(text, start + grammar.decoratorPrefix.count), .Decorator)
+            return
+        }
+        if bytes[first].wordStart {
+            let end = wordEnd(text, start)
+            scan.emit(text, end, wordKind(text, start, end, scan.previous))
+            return
+        }
+        if bytes[first].bracket {
+            scan.emit(text, start + 1, .Bracket)
+            return
+        }
+        if bytes[first].operatorByte {
+            var end = start + 1
+            while end < text.count && bytes[byteAt(text, end)].operatorByte && !opensComment(
+                text,
+                end
+            ) {
+                end++
+            }
+            scan.emit(text, end, .Operator)
+            return
+        }
+        scan.emit(text, start + 1, .Punctuation)
+    }
+
+    // A word's kind, from the word and from what is around it. `previous` is
+    // the last byte before the word that is not whitespace.
+    function wordKind(
+        text: borrow String,
+        start: Number,
+        end: Number,
+        previous: Number
+    ) -> TokenKind {
+        let bucket = words[wordBucket(end - start, byteAt(text, start), byteAt(text, end - 1))]
+        for index in 0..bucket.count {
+            if bucket[index].text.count == end - start && opens(text, bucket[index].text, start) {
+                return copy bucket[index].kind
+            }
+        }
+        let next = byteAt(text, skippingSpaces(text, end))
+        if grammar.callsAreFunctions && next == LexerByte.openParen {
+            if previous == LexerByte.dot {
+                return .Method
+            }
+            return .Function
+        }
+        if grammar.capitalizedAreTypes && isCapital(byteAt(text, start)) {
+            return .Type
+        }
+        if previous == LexerByte.dot {
+            return .Property
+        }
+        return .Variable
+    }
+
+    // A string closed on the line it opened on. One left open runs to the
+    // line's end and no further: the next line starts as code, which is what a
+    // compiler will make of it too.
+    function scanQuoted(text: borrow String, quote: borrow String, scan: borrow mut LineScan) {
+        let start = scan.index
+        let before = scan.tokens.count
+        scan.emit(text, start + quote.count, .StringLiteral)
+        let closed = scanStringBody(text, quote, scan)
+        if closed && grammar.keyedStringsAreProperties && byteAt(
+            text,
+            skippingSpaces(text, scan.index)
+        ) == LexerByte.colon {
+            // The whole key, quotes and escapes and all, is one property name.
+            var keyed: [SyntaxToken] = []
+            for index in 0..before {
+                keyed.append(scan.tokens[index])
+            }
+            keyed.append(SyntaxToken { start: start, end: scan.index, kind: .Property })
+            scan.tokens = move keyed
+        }
+    }
+
+    function scanString(text: borrow String, quote: borrow String, scan: borrow mut LineScan) {
+        if scanStringBody(text, quote, scan) {
+            scan.state = .Code
+        }
+    }
+
+    // A string's text up to and including its closing quote, its escapes cut
+    // out as runs of their own. Whether the quote was found on this line.
+    function scanStringBody(
+        text: borrow String,
+        quote: borrow String,
+        scan: borrow mut LineScan
+    ) -> Bool {
+        var cursor = scan.index
+        while cursor < text.count {
+            if opens(text, grammar.escape, cursor) {
+                scan.emit(text, cursor, .StringLiteral)
+                scan.emit(text, min(cursor + grammar.escape.count + 1, text.count), .Escape)
+                cursor = scan.index
+            } else if opens(text, quote, cursor) {
+                scan.emit(text, cursor + quote.count, .StringLiteral)
+                return true
+            } else {
+                cursor++
+            }
+        }
+        scan.emit(text, text.count, .StringLiteral)
+        return false
+    }
+
+    function opensComment(text: borrow String, at: Number) -> Bool {
+        return bytes[byteAt(text, at)].patternStart && (
+            opens(text, grammar.lineComment, at) || opens(text, grammar.blockComment.open, at)
+        )
+    }
+
+    function skippingSpaces(text: borrow String, from: Number) -> Number {
+        var cursor = from
+        while cursor < text.count && bytes[byteAt(text, cursor)].space {
+            cursor++
+        }
+        return cursor
+    }
+
+    function wordEnd(text: borrow String, from: Number) -> Number {
+        var end = from + 1
+        while end < text.count && bytes[byteAt(text, end)].wordByte {
+            end++
+        }
+        return end
+    }
+}
+
+public function lexer(grammar: LexicalGrammar) -> Lexer {
+    var bytes: [ByteClass] = []
+    for byte in 0..LexerByte.values {
+        bytes.append(
+            ByteClass {
+                space: isWhitespace(byte),
+                digit: isDigit(byte),
+                wordStart: isWordStart(byte),
+                wordByte: isWordByte(byte),
+                bracket: containsByte(grammar.brackets, byte),
+                operatorByte: containsByte(grammar.operators, byte)
+            }
+        )
+    }
+    let patterns = [copy grammar.lineComment, copy grammar.docCommentOpen, copy grammar.blockComment.open, copy grammar.multilineQuote, copy grammar.decoratorPrefix]
+    for index in 0..patterns.count {
+        if patterns[index].count > 0 {
+            bytes[patterns[index].charAt(0)].patternStart = true
+        }
+    }
+    for index in 0..grammar.quotes.count {
+        if grammar.quotes[index].count > 0 {
+            bytes[grammar.quotes[index].charAt(0)].patternStart = true
+        }
+    }
+    var words: [[ListedWord]] = []
+    for _ in 0..LexerLimit.wordBuckets {
+        let empty: [ListedWord] = []
+        words.append(move empty)
+    }
+    // Keywords first: a word listed twice is what it is listed as first.
+    listWords(words, grammar.keywords, .Keyword)
+    listWords(words, grammar.typeKeywords, .Type)
+    listWords(words, grammar.constants, .Constant)
+    return Lexer { grammar: move grammar, bytes: move bytes, words: move words }
+}
+
+// What one byte value can be in the grammar.
+struct ByteClass {
+    let space: Bool
+    let digit: Bool
+    let wordStart: Bool
+    let wordByte: Bool
+    let bracket: Bool
+    let operatorByte: Bool
+    // Whether the byte begins any of the grammar's comments, quotes or
+    // decorators: a byte that does not cannot open one, and is not compared
+    // with them.
+    var patternStart: Bool = false
+}
+
+// A word the grammar lists, and what it lists it as.
+struct ListedWord {
+    let text: String
+    let kind: TokenKind
+}
+
+function listWords(words: borrow mut [[ListedWord]], listed: borrow [String], kind: TokenKind) {
+    for index in 0..listed.count {
+        let word = listed[index]
+        if word.count > 0 {
+            let bucket = wordBucket(word.count, word.charAt(0), word.charAt(word.count - 1))
+            var known = false
+            for entry in 0..words[bucket].count {
+                if words[bucket][entry].text == word {
+                    known = true
+                }
+            }
+            if !known {
+                words[bucket].append(ListedWord { text: copy word, kind: copy kind })
+            }
+        }
+    }
+}
+
+// A word's bucket, from its length and its first and last bytes: three reads,
+// however long the word.
+function wordBucket(length: Number, first: Number, last: Number) -> Number {
+    return (length * 31 + first * 7 + last) & (LexerLimit.wordBuckets - 1)
+}
+
+// A line part-way through being cut.
+struct LineScan {
+    var state: LexicalState
+    var index: Number = 0
+    var tokens: [SyntaxToken] = []
+    // The last byte that was not whitespace: whether a word follows a `.`.
+    var previous: Number = 0
+
+    function emit(text: borrow String, end: Number, kind: TokenKind) {
+        if end <= index {
+            return
+        }
+        self.tokens.append(SyntaxToken { start: index, end: end, kind: kind })
+        let last = byteAt(text, end - 1)
+        if !isWhitespace(last) {
+            self.previous = last
+        }
+        self.index = end
+    }
+}
+
+// The rest of a comment region: up to its close, or the whole line when it
+// does not close here.
+function scanRegionClose(
+    text: borrow String,
+    close: borrow String,
+    kind: TokenKind,
+    scan: borrow mut LineScan
+) {
+    for cursor in scan.index..text.count {
+        if opens(text, close, cursor) {
+            scan.emit(text, cursor + close.count, move kind)
+            scan.state = .Code
+            return
+        }
+    }
+    scan.emit(text, text.count, move kind)
+}
+
+// Whether `pattern` is written in `text` at `at`, compared in place.
+function opens(text: borrow String, pattern: borrow String, at: Number) -> Bool {
+    if pattern.count == 0 || at + pattern.count > text.count {
+        return false
+    }
+    for index in 0..pattern.count {
+        if text.charAt(at + index) != pattern.charAt(index) {
+            return false
+        }
+    }
+    return true
+}
+
+// The byte at an index, or 0 off either end of the text.
+function byteAt(text: borrow String, at: Number) -> Number {
+    if at < 0 || at >= text.count {
+        return 0
+    }
+    return text.charAt(at)
+}
+
+function containsByte(set: borrow String, byte: Number) -> Bool {
+    for index in 0..set.count {
+        if set.charAt(index) == byte {
+            return true
+        }
+    }
+    return false
+}
+
+function isWhitespace(byte: Number) -> Bool {
+    return byte == LexerByte.space || byte == LexerByte.tab || byte == LexerByte.carriageReturn
+}
+
+function isDigit(byte: Number) -> Bool {
+    return byte >= LexerByte.zero && byte <= LexerByte.nine
+}
+
+function isCapital(byte: Number) -> Bool {
+    return byte >= LexerByte.upperA && byte <= LexerByte.upperZ
+}
+
+// Letters, `_` and `$` begin a word, and so does any byte of a non-ASCII
+// scalar: an identifier in another script is still an identifier.
+function isWordStart(byte: Number) -> Bool {
+    return isCapital(byte) || (
+        byte >= LexerByte.lowerA && byte <= LexerByte.lowerZ
+    ) || byte == LexerByte.underscore
+        || byte == LexerByte.dollar || byte >= LexerByte.firstNonAscii
+}
+
+function isWordByte(byte: Number) -> Bool {
+    return isWordStart(byte) || isDigit(byte)
+}

@@ -1,0 +1,163 @@
+import Foundation
+
+// Every question an editor can put to a session, and every shape an answer
+// comes back in.
+//
+// Questions are values, not calls, because none is answered at once: a server
+// is a process with its own pace, and an editor that waited on one would stop
+// drawing while it thought. `CodeSession.request` hands back an id; the answer
+// comes out of `poll` carrying it.
+
+public struct RequestId {
+    let value: Number
+
+    function equals(other: borrow RequestId) -> Bool {
+        return value == other.value
+    }
+}
+
+public enum CodeRequest {
+    Completion(CompletionQuery)
+    ResolveCompletion(CompletionItem)
+    Hover(DocumentPosition)
+    SignatureHelp(SignatureQuery)
+    Definition(DocumentPosition)
+    Declaration(DocumentPosition)
+    TypeDefinition(DocumentPosition)
+    Implementation(DocumentPosition)
+    References(ReferenceQuery)
+    DocumentHighlights(DocumentPosition)
+    DocumentSymbols(DocumentUri)
+    WorkspaceSymbols(String)
+    CodeActions(CodeActionQuery)
+    ResolveCodeAction(CodeAction)
+    CodeLenses(DocumentUri)
+    ResolveCodeLens(CodeLens)
+    Format(FormatQuery)
+    FormatRange(FormatQuery)
+    FormatOnType(OnTypeFormatQuery)
+    PrepareRename(DocumentPosition)
+    Rename(RenameQuery)
+    FoldingRanges(DocumentUri)
+    SelectionRanges(SelectionQuery)
+    InlayHints(DocumentRange)
+    DocumentLinks(DocumentUri)
+    PrepareCallHierarchy(DocumentPosition)
+    IncomingCalls(HierarchyItem)
+    OutgoingCalls(HierarchyItem)
+    PrepareTypeHierarchy(DocumentPosition)
+    Supertypes(HierarchyItem)
+    Subtypes(HierarchyItem)
+    ExecuteCommand(Command)
+    // Diagnostics asked for rather than waited for, from a server that
+    // answers them that way.
+    Diagnostics(DocumentUri)
+}
+
+public struct CompletionQuery {
+    let uri: DocumentUri
+    let position: TextPosition
+    let context: CompletionContext = CompletionContext {}
+}
+
+public struct SignatureQuery {
+    let uri: DocumentUri
+    let position: TextPosition
+    let context: SignatureHelpContext = SignatureHelpContext {}
+}
+
+public struct ReferenceQuery {
+    let uri: DocumentUri
+    let position: TextPosition
+    let includeDeclaration: Bool = true
+}
+
+public struct CodeActionQuery {
+    let uri: DocumentUri
+    let range: TextRange
+    let context: CodeActionContext = CodeActionContext {}
+}
+
+// A whole document, or the range in it, formatted.
+public struct FormatQuery {
+    let uri: DocumentUri
+    let range: TextRange? = .None
+    let options: FormattingOptions = FormattingOptions {}
+}
+
+public struct OnTypeFormatQuery {
+    let uri: DocumentUri
+    let position: TextPosition
+    // What was typed: `}`, `;`, a newline.
+    let character: String
+    let options: FormattingOptions = FormattingOptions {}
+}
+
+public struct RenameQuery {
+    let uri: DocumentUri
+    let position: TextPosition
+    let newName: String
+}
+
+public struct SelectionQuery {
+    let uri: DocumentUri
+    let positions: [TextPosition]
+}
+
+// What a question was answered with. Which shape answers which question is
+// fixed: a `Definition` is answered with `Locations`, a `Rename` with an
+// `Edit`, every question with `Nothing`, `Unsupported`, `Cancelled` or
+// `Failed`.
+public enum CodeResult {
+    Completions(CompletionList)
+    ResolvedCompletion(CompletionItem)
+    Hovered(Hover)
+    Signatures(SignatureHelp)
+    // Definition, declaration, type definition and implementation.
+    Locations([LocationLink])
+    References([Location])
+    Highlights([DocumentHighlight])
+    Symbols([DocumentSymbol])
+    WorkspaceSymbols([WorkspaceSymbol])
+    CodeActions([CodeAction])
+    ResolvedCodeAction(CodeAction)
+    CodeLenses([CodeLens])
+    ResolvedCodeLens(CodeLens)
+    // Formatting, in every form.
+    TextEdits([TextEdit])
+    RenameTarget(RenameTarget)
+    // A rename.
+    Edit(WorkspaceEdit)
+    FoldingRanges([FoldingRange])
+    SelectionRanges([SelectionRange])
+    InlayHints([InlayHint])
+    DocumentLinks([DocumentLink])
+    // Call and type hierarchies, prepared and walked to supertypes or subtypes.
+    HierarchyItems([HierarchyItem])
+    Calls([HierarchyCall])
+    CommandResult(JsonValue)
+    Diagnostics(DocumentDiagnostics)
+    // Asked and answered, with nothing: no definition under the caret.
+    Nothing
+    // Nobody serving the document can answer this question.
+    Unsupported
+    // Cancelled by the editor, or overtaken by an edit to the document before
+    // its answer arrived.
+    Cancelled
+    Failed(CodeError)
+}
+
+public struct CodeError {
+    let code: Number
+    let message: String
+}
+
+// An answer, and what it answers: the question's id, and the version of the
+// document it was computed against. An editor drops an answer for a version
+// its document has left.
+public struct CodeReply {
+    let id: RequestId
+    let uri: DocumentUri
+    let version: Number
+    let result: CodeResult
+}
