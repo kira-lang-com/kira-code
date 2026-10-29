@@ -1,3 +1,3 @@
 # 26.10.4
 
-Initial source release: Editor-facing code sessions for tokens, ranges, and edits, with lexical grammars and provider support.
+The first source release of KiraCode provides `CodeSession` for editor-facing tokens, ranges, and edits. It includes built-in lexical grammars and keeps syntax providers separate from editor drawing, colors, fonts, and widgets.
