@@ -22,98 +22,132 @@ public struct CodeSession {
     let store: RawPtr
 
     function open(uri: DocumentUri, text: borrow String, languageId: String = "") {
-        var session = nativeRecover<SessionStore>(store)
-        session.open(move uri, text, move languageId)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.open(move uri, text, move languageId)
+        }
     }
 
     function change(uri: borrow DocumentUri, edits: borrow [TextEdit]) {
-        var session = nativeRecover<SessionStore>(store)
-        session.change(uri, edits)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.change(uri, edits)
+        }
     }
 
     function save(uri: borrow DocumentUri) {
-        var session = nativeRecover<SessionStore>(store)
-        session.save(uri)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.save(uri)
+        }
     }
 
     function close(uri: borrow DocumentUri) {
-        var session = nativeRecover<SessionStore>(store)
-        session.close(uri)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.close(uri)
+        }
     }
 
     function document(uri: borrow DocumentUri) -> TextDocument? {
-        let session = nativeRecover<SessionStore>(store)
-        return session.document(uri)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.document(uri)
+        }
     }
 
     function lineCount(uri: borrow DocumentUri) -> Number {
-        let session = nativeRecover<SessionStore>(store)
-        return session.lineCount(uri)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.lineCount(uri)
+        }
     }
 
     function isModified(uri: borrow DocumentUri) -> Bool {
-        let session = nativeRecover<SessionStore>(store)
-        return session.isModified(uri)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.isModified(uri)
+        }
     }
 
     function language(uri: borrow DocumentUri) -> Language {
-        let session = nativeRecover<SessionStore>(store)
-        return session.language(uri)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.language(uri)
+        }
     }
 
     function highlight(uri: borrow DocumentUri, from: Number, to: Number) -> [HighlightedLine] {
-        let session = nativeRecover<SessionStore>(store)
-        return session.highlight(uri, from, to)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.highlight(uri, from, to)
+        }
     }
 
     function diagnostics(uri: borrow DocumentUri) -> [Diagnostic] {
-        let session = nativeRecover<SessionStore>(store)
-        return session.diagnostics(uri)
+        unsafe {
+            let session = nativeRecover<SessionStore>(store)
+            return session.diagnostics(uri)
+        }
     }
 
     // Adds a language, or replaces the one with its identifier. Documents
     // already open keep the language they were opened in.
     function registerLanguage(language: Language) {
-        var session = nativeRecover<SessionStore>(store)
-        session.languages.register(move language)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.languages.register(move language)
+        }
     }
 
     // Describes a server, replacing any described with its id.
     function registerServer(server: LanguageServerConfiguration) {
-        var session = nativeRecover<SessionStore>(store)
-        session.register(move server)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.register(move server)
+        }
     }
 
     function request(request: borrow CodeRequest) -> RequestId {
-        var session = nativeRecover<SessionStore>(store)
-        return session.request(request)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            return session.request(request)
+        }
     }
 
     function cancel(id: borrow RequestId) {
-        var session = nativeRecover<SessionStore>(store)
-        session.cancel(id)
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            session.cancel(id)
+        }
     }
 
     function poll() -> [CodeEvent] {
-        var session = nativeRecover<SessionStore>(store)
-        return session.poll()
+        unsafe {
+            var session = nativeRecover<SessionStore>(store)
+            return session.poll()
+        }
     }
 
     // Stops the session: its servers, and the documents it holds. A handle to
     // it is not to be used after.
     function shutdown() {
-        nativeUserDataRelease(store)
+        unsafe {
+            nativeUserDataRelease(store)
+        }
     }
 }
 
 public function codeSession(root: DocumentUri) -> CodeSession {
-    let held = nativeUserData(
-        nativeState(
-            SessionStore { workspace: WorkspaceFolder { uri: copy root, name: root.name() } }
+    unsafe {
+        let held = nativeUserData(
+            nativeState(
+                SessionStore { workspace: WorkspaceFolder { uri: copy root, name: root.name() } }
+            )
         )
-    )
-    nativeUserDataRetain(held)
-    return CodeSession { store: held }
+        nativeUserDataRetain(held)
+        return CodeSession { store: held }
+    }
 }
 
 // What a session holds, behind its handle. Every change is made in place:
